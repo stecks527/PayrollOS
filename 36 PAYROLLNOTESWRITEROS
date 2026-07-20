@@ -1,0 +1,258 @@
+/*************************************************
+ * 36 PAYROLLNOTESWRITEROS
+ * Version: 1.1.0
+ * Status: ACTIVE
+ *
+ * Writes model-driven Payroll Notes directly into
+ * column B on the same row as the NOTES label.
+ *
+ * The notes remain normal editable sheet text.
+ *************************************************/
+
+function PayrollNotesWriterOS() {
+  return {
+    preview: payrollNotesWriterOSPreview_,
+    write: payrollNotesWriterOSWrite_,
+    test: testPayrollNotesWriterOS
+  };
+}
+
+
+/* =========================================================
+ * PREVIEW
+ * ========================================================= */
+
+function payrollNotesWriterOSPreview_(notesResult) {
+  const notes =
+    notesResult ||
+    PayrollNotesOS().current();
+
+  return {
+    system: "PayrollNotesWriterOS",
+    version: "1.1.0",
+    weekStart: notes.weekStart,
+    weekEnd: notes.weekEnd,
+    text: notes.text,
+    counts: notes.counts,
+    missingCoverage: notes.missingCoverage
+  };
+}
+
+
+/* =========================================================
+ * WRITE
+ * ========================================================= */
+
+function payrollNotesWriterOSWrite_(notesResult) {
+  const startedAt =
+    Date.now();
+
+  const ss =
+    SpreadsheetApp.getActiveSpreadsheet();
+
+  const payroll =
+    ss.getSheetByName("Payroll");
+
+  if (!payroll) {
+    throw new Error(
+      'Could not find the "Payroll" tab.'
+    );
+  }
+
+  /*
+   * Accept a prebuilt PayrollNotesOS result when the
+   * full Payroll workflow has already built the model.
+   *
+   * When run independently, build the notes here.
+   */
+  const notes =
+    notesResult ||
+    PayrollNotesOS().current();
+
+  const notesCell =
+    payrollNotesWriterOSFindNotesCell_(
+      payroll
+    );
+
+  if (!notesCell) {
+    throw new Error(
+      'Could not find "NOTES" in column A on Payroll.'
+    );
+  }
+
+  const text =
+    String(notes.text || "");
+
+  notesCell.clearContent();
+
+  notesCell
+    .setValue(text)
+    .setWrap(true)
+    .setVerticalAlignment("top");
+
+  SpreadsheetApp.flush();
+
+  const writtenText =
+    notesCell.getDisplayValue();
+
+  const result = {
+    success:
+      true,
+
+    weekStart:
+      notes.weekStart,
+
+    weekEnd:
+      notes.weekEnd,
+
+    notesCell:
+      notesCell.getA1Notation(),
+
+    writtenCells: [
+      notesCell.getA1Notation()
+    ],
+
+    outGroups:
+      notes.counts.outGroups,
+
+    outPerformances:
+      notes.counts.outPerformances,
+
+    coveragePerformances:
+      notes.counts.coveragePerformances,
+
+    missingCoveragePerformances:
+      notes.counts
+        .missingCoveragePerformances,
+
+    matchesModel:
+      writtenText === text,
+
+    durationMs:
+      Date.now() - startedAt
+  };
+
+  Logger.log(
+    "PAYROLLNOTESWRITEROS WRITE"
+  );
+
+  Logger.log(
+    JSON.stringify(
+      result,
+      null,
+      2
+    )
+  );
+
+  return result;
+}
+
+
+/* =========================================================
+ * FIND NOTES CELL
+ * ========================================================= */
+
+function payrollNotesWriterOSFindNotesCell_(
+  payroll
+) {
+  const lastRow =
+    payroll.getLastRow();
+
+  if (lastRow < 1) {
+    return null;
+  }
+
+  const labels =
+    payroll
+      .getRange(
+        1,
+        1,
+        lastRow,
+        1
+      )
+      .getDisplayValues();
+
+  for (
+    let rowIndex = 0;
+    rowIndex < labels.length;
+    rowIndex++
+  ) {
+    const label =
+      String(
+        labels[rowIndex][0] || ""
+      )
+        .trim()
+        .toUpperCase();
+
+    if (label === "NOTES") {
+      /*
+       * rowIndex is zero-based.
+       * NOTES is in column A.
+       * Write into column B on the same row.
+       */
+      return payroll.getRange(
+        rowIndex + 1,
+        2
+      );
+    }
+  }
+
+  return null;
+}
+
+
+/* =========================================================
+ * PUBLIC COMPATIBILITY WRAPPER
+ * ========================================================= */
+
+function refreshPayrollNotesFromModel(
+  notesResult
+) {
+  return PayrollNotesWriterOS()
+    .write(notesResult);
+}
+
+
+/* =========================================================
+ * TEST
+ * ========================================================= */
+
+function testPayrollNotesWriterOS() {
+  const result =
+    PayrollNotesWriterOS()
+      .write();
+
+  SpreadsheetApp
+    .getUi()
+    .alert(
+      [
+        "Payroll Notes write complete.",
+        "",
+        "Week: " +
+          result.weekStart +
+          " through " +
+          result.weekEnd,
+        "Notes cell: " +
+          result.notesCell,
+        "OUT groups: " +
+          result.outGroups,
+        "OUT performances: " +
+          result.outPerformances,
+        "Coverage performances: " +
+          result.coveragePerformances,
+        "Missing coverage: " +
+          result.missingCoveragePerformances,
+        "Written text matches model: " +
+          (
+            result.matchesModel
+              ? "YES"
+              : "NO"
+          ),
+        "Duration: " +
+          result.durationMs +
+          " ms"
+      ].join("\n")
+    );
+
+  return result;
+}
