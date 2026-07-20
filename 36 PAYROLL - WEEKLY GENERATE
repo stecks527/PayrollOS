@@ -44,19 +44,7 @@ function PayrollOS() {
  * ========================================================= */
 
 function fillPayrollFromCurrentWeekly() {
-  return PayrollOS().refresh({
-    forceBuild:
-      true,
-
-    writeGrid:
-      true,
-
-    writeNotes:
-      true,
-
-    showAlert:
-      true
-  });
+  return openPayrollOSPreview();
 }
 
 
