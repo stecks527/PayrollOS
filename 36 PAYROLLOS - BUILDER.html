@@ -1,0 +1,1734 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+
+  <style>
+    :root {
+      --blue: #2457c5;
+      --blue-dark: #18459f;
+      --blue-soft: #e8f0fe;
+      --blue-line: #a9c2f5;
+
+      --orange: #9a4d00;
+      --orange-soft: #ffead7;
+      --orange-line: #edb57e;
+
+      --yellow: #715200;
+      --yellow-soft: #fff3bf;
+      --yellow-line: #dfc35a;
+
+      --ink: #202124;
+      --muted: #69717d;
+      --line: #d8dde6;
+      --line-dark: #c5cad3;
+      --panel: #f7f8fa;
+      --panel-dark: #f1f3f4;
+
+      --danger: #b3261e;
+      --danger-soft: #fce8e6;
+
+      --warning: #8a4b00;
+      --warning-soft: #fff4df;
+
+      --success: #137333;
+      --success-soft: #e6f4ea;
+
+      --purple: #7146a6;
+      --purple-soft: #f1e8fb;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body {
+      width: 100%;
+      height: 100%;
+    }
+
+    body {
+      margin: 0;
+      overflow: hidden;
+      font-family: Arial, Helvetica, sans-serif;
+      color: var(--ink);
+      background: #fff;
+    }
+
+    button,
+    textarea {
+      font-family: inherit;
+    }
+
+    .app {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr) auto auto;
+      height: 100vh;
+    }
+
+    /* =====================================================
+     * HEADER
+     * ===================================================== */
+
+    .app-header {
+      padding: 17px 22px 13px;
+      border-bottom: 1px solid var(--line);
+      background: #fff;
+    }
+
+    .header-main {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 20px;
+    }
+
+    .header-copy {
+      min-width: 0;
+    }
+
+    .app-title {
+      margin: 0 0 5px;
+      font-size: 25px;
+      line-height: 1.15;
+      font-weight: 800;
+    }
+
+    .week-label {
+      font-size: 14px;
+      line-height: 1.4;
+      font-weight: 700;
+    }
+
+    .weekly-label {
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    .safe-pill {
+      flex: 0 0 auto;
+      padding: 7px 11px;
+      border-radius: 999px;
+      background: var(--blue-soft);
+      color: var(--blue);
+      font-size: 11px;
+      line-height: 1;
+      font-weight: 800;
+      white-space: nowrap;
+    }
+
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin-top: 13px;
+    }
+
+    .legend-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 9px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #fff;
+      color: #454b54;
+      font-size: 10px;
+      font-weight: 700;
+    }
+
+    .legend-swatch {
+      width: 11px;
+      height: 11px;
+      border: 1px solid rgba(0, 0, 0, .08);
+      border-radius: 3px;
+    }
+
+    .legend-swatch.new-actor {
+      background: var(--blue-soft);
+      border-color: var(--blue-line);
+    }
+
+    .legend-swatch.understudy {
+      background: var(--orange-soft);
+      border-color: var(--orange-line);
+    }
+
+    .legend-swatch.exception {
+      background: var(--yellow-soft);
+      border-color: var(--yellow-line);
+    }
+
+    .legend-swatch.standard {
+      background: #fff;
+      border-color: var(--line-dark);
+    }
+
+    /* =====================================================
+     * SCHEDULE GRID
+     * ===================================================== */
+
+    .schedule-wrap {
+      min-height: 0;
+      overflow: auto;
+      background: #fff;
+    }
+
+    .schedule-table {
+      width: max-content;
+      min-width: 100%;
+      border-collapse: separate;
+      border-spacing: 0;
+      table-layout: fixed;
+    }
+
+    .schedule-table th,
+    .schedule-table td {
+      border-right: 1px solid var(--line);
+      border-bottom: 1px solid var(--line);
+      background: #fff;
+      vertical-align: top;
+    }
+
+    .schedule-table thead th {
+      position: sticky;
+      top: 0;
+      z-index: 5;
+      background: var(--panel-dark);
+    }
+
+    .person-head,
+    .person-cell {
+      position: sticky;
+      left: 0;
+      width: 148px;
+      min-width: 148px;
+      max-width: 148px;
+    }
+
+    .person-head {
+      z-index: 8 !important;
+      padding: 11px 10px;
+      text-align: left;
+      font-size: 12px;
+      font-weight: 800;
+    }
+
+    .person-cell {
+      z-index: 3;
+      padding: 11px 10px;
+      background: #fff !important;
+    }
+
+    tr.stage-management-row .person-cell {
+      background: #f1f5ff !important;
+    }
+
+    .person-name {
+      color: var(--ink);
+      font-size: 13px;
+      line-height: 1.2;
+      font-weight: 800;
+      overflow-wrap: anywhere;
+    }
+
+    .person-role {
+      display: block;
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 1.25;
+      font-weight: 700;
+      overflow-wrap: anywhere;
+    }
+
+    .day-head {
+      width: 184px;
+      min-width: 184px;
+      max-width: 184px;
+      padding: 9px 8px 8px;
+      text-align: center;
+    }
+
+    .day-name {
+      font-size: 12px;
+      line-height: 1.2;
+      font-weight: 800;
+    }
+
+    .day-events {
+      min-height: 18px;
+      margin-top: 6px;
+      color: #4e5560;
+      font-size: 9px;
+      line-height: 1.35;
+      font-weight: 600;
+    }
+
+    .day-event + .day-event {
+      margin-top: 2px;
+    }
+
+    .person-day-cell {
+      width: 184px;
+      min-width: 184px;
+      max-width: 184px;
+      padding: 6px;
+      cursor: pointer;
+      transition:
+        background-color .12s ease,
+        box-shadow .12s ease;
+    }
+
+    .person-day-cell:hover {
+      background: #fafbfc;
+      box-shadow: inset 0 0 0 1px #cad4e6;
+    }
+
+    .day-content {
+      min-height: 58px;
+    }
+
+    .event-card {
+      width: 100%;
+      padding: 7px 8px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fff;
+      color: var(--ink);
+      font-size: 11px;
+      line-height: 1.4;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+
+    .event-card + .event-card {
+      margin-top: 6px;
+    }
+
+    .event-card.standard {
+      background: #fff;
+      border-color: #e0e3e8;
+    }
+
+    .event-card.new-actor-rehearsal {
+      background: var(--blue-soft);
+      border-color: var(--blue-line);
+      color: #183d82;
+    }
+
+    .event-card.understudy-rehearsal {
+      background: var(--orange-soft);
+      border-color: var(--orange-line);
+      color: #7b3c00;
+    }
+
+    .event-card.exception {
+      background: var(--yellow-soft);
+      border-color: var(--yellow-line);
+      color: #5f4700;
+    }
+
+    .empty-cell-message {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 48px;
+      color: #a0a6af;
+      font-size: 10px;
+      font-style: italic;
+      opacity: 0;
+      transition: opacity .12s ease;
+    }
+
+    .person-day-cell:hover .empty-cell-message {
+      opacity: 1;
+    }
+
+    /* =====================================================
+     * INLINE EDITOR
+     * ===================================================== */
+
+    .cell-editor {
+      min-width: 0;
+    }
+
+    .editor-field + .editor-field {
+      margin-top: 7px;
+    }
+
+    .editor-label {
+      display: block;
+      margin: 0 0 3px 2px;
+      color: var(--muted);
+      font-size: 8px;
+      line-height: 1;
+      font-weight: 800;
+      letter-spacing: .45px;
+      text-transform: uppercase;
+    }
+
+    .editor-textarea {
+      display: block;
+      width: 100%;
+      min-height: 62px;
+      padding: 7px;
+      resize: vertical;
+      border: 1px solid var(--blue);
+      border-radius: 7px;
+      background: #fff;
+      color: var(--ink);
+      font-size: 11px;
+      line-height: 1.4;
+      outline: none;
+      box-shadow: 0 0 0 2px rgba(36, 87, 197, .1);
+    }
+
+    .editor-buttons {
+      display: flex;
+      justify-content: flex-end;
+      gap: 6px;
+      margin-top: 7px;
+    }
+
+    .mini-button {
+      padding: 6px 8px;
+      border: 0;
+      border-radius: 6px;
+      font-size: 9px;
+      font-weight: 800;
+      cursor: pointer;
+    }
+
+    .mini-button.cancel {
+      background: #e8eaed;
+      color: #34373d;
+    }
+
+    .mini-button.save {
+      background: var(--blue);
+      color: #fff;
+    }
+
+    /* =====================================================
+     * BOTTOM REVIEW PANEL
+     * ===================================================== */
+
+    .review-panel {
+      display: grid;
+      grid-template-columns:
+        minmax(310px, 1.25fr)
+        minmax(250px, .8fr)
+        minmax(410px, 1.55fr);
+      max-height: 220px;
+      overflow: auto;
+      border-top: 1px solid var(--line);
+      background: var(--panel);
+    }
+
+    .review-section {
+      min-width: 0;
+      padding: 13px 15px;
+      border-right: 1px solid var(--line);
+    }
+
+    .review-section:last-child {
+      border-right: 0;
+    }
+
+    .review-heading {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin: 0 0 9px;
+      font-size: 13px;
+      line-height: 1.2;
+      font-weight: 800;
+    }
+
+    .count-pill {
+      flex: 0 0 auto;
+      padding: 3px 7px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #fff;
+      color: var(--muted);
+      font-size: 9px;
+      font-weight: 800;
+    }
+
+    .notes-preview {
+      max-height: 145px;
+      overflow: auto;
+      padding: 9px 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      font-size: 10px;
+      line-height: 1.45;
+      white-space: pre-wrap;
+    }
+
+    .warning-item {
+      margin-bottom: 7px;
+      padding: 8px 9px;
+      border-radius: 8px;
+      font-size: 10px;
+      line-height: 1.35;
+    }
+
+    .warning-item.error {
+      background: var(--danger-soft);
+      color: var(--danger);
+    }
+
+    .warning-item.warning {
+      background: var(--warning-soft);
+      color: var(--warning);
+    }
+
+    .no-warnings {
+      padding: 8px 9px;
+      border-radius: 8px;
+      background: var(--success-soft);
+      color: var(--success);
+      font-size: 10px;
+      line-height: 1.35;
+      font-weight: 800;
+    }
+
+    .summary-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(76px, 1fr));
+      gap: 7px;
+    }
+
+    .summary-card {
+      min-width: 0;
+      padding: 8px 9px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      background: #fff;
+    }
+
+    .summary-number {
+      font-size: 17px;
+      line-height: 1;
+      font-weight: 800;
+    }
+
+    .summary-label {
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 8px;
+      line-height: 1.2;
+      font-weight: 700;
+    }
+
+    /* =====================================================
+     * FOOTER
+     * ===================================================== */
+
+    .app-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 15px;
+      padding: 11px 18px;
+      border-top: 1px solid var(--line);
+      background: #fff;
+    }
+
+    .footer-copy {
+      min-width: 0;
+    }
+
+    .status {
+      color: var(--blue);
+      font-size: 11px;
+      line-height: 1.25;
+      font-weight: 800;
+    }
+
+    .footer-note {
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 9px;
+      line-height: 1.25;
+    }
+
+    .footer-buttons {
+      display: flex;
+      flex: 0 0 auto;
+      gap: 9px;
+    }
+
+    .button {
+      padding: 10px 15px;
+      border: 0;
+      border-radius: 9px;
+      font-size: 11px;
+      font-weight: 800;
+      cursor: pointer;
+    }
+
+    .button.secondary {
+      background: #e8eaed;
+      color: var(--ink);
+    }
+
+    .button.primary {
+      background: var(--blue);
+      color: #fff;
+    }
+
+    .button.primary:hover {
+      background: var(--blue-dark);
+    }
+
+    .button:disabled {
+      cursor: default;
+      opacity: .55;
+    }
+
+    /* =====================================================
+     * RESPONSIVE
+     * ===================================================== */
+
+    @media (max-width: 1150px) {
+      .review-panel {
+        grid-template-columns: 1fr 1fr;
+      }
+
+      .review-section:last-child {
+        grid-column: 1 / -1;
+        border-top: 1px solid var(--line);
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="app">
+
+    <header class="app-header">
+      <div class="header-main">
+        <div class="header-copy">
+          <h1 class="app-title">PayrollOS Builder</h1>
+
+          <div
+            class="week-label"
+            id="weekLabel"
+          ></div>
+
+          <div
+            class="weekly-label"
+            id="weeklyLabel"
+          ></div>
+        </div>
+
+        <div class="safe-pill">
+          Nothing writes until Apply
+        </div>
+      </div>
+
+      <div class="legend">
+        <div class="legend-item">
+          <span class="legend-swatch new-actor"></span>
+          New Actor Rehearsal
+        </div>
+
+        <div class="legend-item">
+          <span class="legend-swatch understudy"></span>
+          U/S Rehearsal
+        </div>
+
+        <div class="legend-item">
+          <span class="legend-swatch exception"></span>
+          OUT / IN / Coverage
+        </div>
+
+        <div class="legend-item">
+          <span class="legend-swatch standard"></span>
+          Performance / Other
+        </div>
+      </div>
+    </header>
+
+    <main class="schedule-wrap">
+      <table class="schedule-table">
+        <thead id="scheduleHead"></thead>
+        <tbody id="scheduleBody"></tbody>
+      </table>
+    </main>
+
+    <section class="review-panel">
+      <div class="review-section">
+        <h2 class="review-heading">
+          <span>Payroll Notes Preview</span>
+          <span
+            class="count-pill"
+            id="notesCount"
+          ></span>
+        </h2>
+
+        <div
+          class="notes-preview"
+          id="notesPreview"
+        ></div>
+      </div>
+
+      <div class="review-section">
+        <h2 class="review-heading">
+          <span>Warnings</span>
+          <span
+            class="count-pill"
+            id="warningsCount"
+          ></span>
+        </h2>
+
+        <div id="warnings"></div>
+      </div>
+
+      <div class="review-section">
+        <h2 class="review-heading">
+          <span>Summary</span>
+        </h2>
+
+        <div
+          class="summary-grid"
+          id="summaryGrid"
+        ></div>
+      </div>
+    </section>
+
+    <footer class="app-footer">
+      <div class="footer-copy">
+        <div
+          class="status"
+          id="status"
+        >
+          Review the proposed schedule. Click any day to edit.
+        </div>
+
+        <div class="footer-note">
+          Payroll Notes are generated from the structured schedule model.
+        </div>
+      </div>
+
+      <div class="footer-buttons">
+        <button
+          type="button"
+          class="button secondary"
+          onclick="google.script.host.close()"
+        >
+          Cancel
+        </button>
+
+        <button
+          type="button"
+          class="button primary"
+          id="applyButton"
+          onclick="applyPayroll()"
+        >
+          Apply to Payroll
+        </button>
+      </div>
+    </footer>
+
+  </div>
+
+  <script>
+    const payload =
+      <?!= initialPayloadJson ?>;
+
+    let activeEditor = null;
+
+    document.addEventListener(
+      "DOMContentLoaded",
+      initializePayrollBuilder
+    );
+
+
+    /* =====================================================
+     * INITIALIZATION
+     * ===================================================== */
+
+    function initializePayrollBuilder() {
+      renderHeader();
+      renderSchedule();
+      renderNotes();
+      renderWarnings();
+      renderSummary();
+    }
+
+
+    function renderHeader() {
+      document.getElementById(
+        "weekLabel"
+      ).textContent =
+        formatWeekLabel(
+          payload.weekStart,
+          payload.weekEnd
+        );
+
+      document.getElementById(
+        "weeklyLabel"
+      ).textContent =
+        payload.weeklySheet
+          ? "Weekly Schedule: " +
+            payload.weeklySheet
+          : "";
+    }
+
+
+    /* =====================================================
+     * SCHEDULE
+     * ===================================================== */
+
+    function renderSchedule() {
+      renderScheduleHead();
+      renderScheduleBody();
+    }
+
+
+    function renderScheduleHead() {
+      const head =
+        document.getElementById(
+          "scheduleHead"
+        );
+
+      head.innerHTML =
+        "<tr>" +
+          '<th class="person-head">' +
+            "Person" +
+          "</th>" +
+
+          (payload.days || []).map(
+            function (day) {
+              return renderDayHeader(
+                day
+              );
+            }
+          ).join("") +
+
+        "</tr>";
+    }
+
+
+    function renderDayHeader(day) {
+      const dayName =
+        day.fullDayName ||
+        day.dayName ||
+        "";
+
+      const shortName =
+        day.dayName ||
+        dayName.substring(0, 3);
+
+      const events =
+        Array.isArray(
+          day.events
+        )
+          ? day.events
+          : [];
+
+      return (
+        '<th class="day-head">' +
+
+          '<div class="day-name">' +
+            escapeHtml(shortName) +
+            " · " +
+            escapeHtml(day.label || "") +
+          "</div>" +
+
+          '<div class="day-events">' +
+            (
+              events.length
+                ? events.map(
+                    function (eventText) {
+                      return (
+                        '<div class="day-event">' +
+                          escapeHtml(eventText) +
+                        "</div>"
+                      );
+                    }
+                  ).join("")
+                : "&nbsp;"
+            ) +
+          "</div>" +
+
+        "</th>"
+      );
+    }
+
+
+    function renderScheduleBody() {
+      const body =
+        document.getElementById(
+          "scheduleBody"
+        );
+
+      body.innerHTML =
+        (payload.people || []).map(
+          function (
+            person,
+            personIndex
+          ) {
+            return renderPersonRow(
+              person,
+              personIndex
+            );
+          }
+        ).join("");
+    }
+
+
+    function renderPersonRow(
+      person,
+      personIndex
+    ) {
+      const rowClass =
+        person.isStageManager
+          ? "stage-management-row"
+          : "";
+
+      return (
+        '<tr class="' +
+          rowClass +
+        '">' +
+
+          '<td class="person-cell">' +
+            '<div class="person-name">' +
+              escapeHtml(
+                person.displayName ||
+                person.name ||
+                ""
+              ) +
+            "</div>" +
+
+            '<span class="person-role">' +
+              escapeHtml(
+                person.role ||
+                (
+                  person.isStageManager
+                    ? "Stage Management"
+                    : "Actor"
+                )
+              ) +
+            "</span>" +
+          "</td>" +
+
+          (person.days || []).map(
+            function (
+              day,
+              dayIndex
+            ) {
+              return renderPersonDayCell(
+                person,
+                day,
+                personIndex,
+                dayIndex
+              );
+            }
+          ).join("") +
+
+        "</tr>"
+      );
+    }
+
+
+    function renderPersonDayCell(
+      person,
+      day,
+      personIndex,
+      dayIndex
+    ) {
+      const cellId =
+        buildCellId(
+          personIndex,
+          dayIndex
+        );
+
+      return (
+        '<td ' +
+          'class="person-day-cell" ' +
+          'id="' +
+            cellId +
+          '" ' +
+          'data-person-index="' +
+            personIndex +
+          '" ' +
+          'data-day-index="' +
+            dayIndex +
+          '" ' +
+          'onclick="openCellEditor(' +
+            personIndex +
+            "," +
+            dayIndex +
+          ')">' +
+
+          renderDayDisplay(
+            day
+          ) +
+
+        "</td>"
+      );
+    }
+
+
+    function renderDayDisplay(day) {
+      const cards = [];
+
+      if (
+        String(
+          day.top || ""
+        ).trim()
+      ) {
+        cards.push(
+          renderEventCard(
+            day.top,
+            day.topKind
+          )
+        );
+      }
+
+      if (
+        String(
+          day.bottom || ""
+        ).trim()
+      ) {
+        cards.push(
+          renderEventCard(
+            day.bottom,
+            day.bottomKind
+          )
+        );
+      }
+
+      if (!cards.length) {
+        return (
+          '<div class="day-content">' +
+            '<div class="empty-cell-message">' +
+              "Click to edit" +
+            "</div>" +
+          "</div>"
+        );
+      }
+
+      return (
+        '<div class="day-content">' +
+          cards.join("") +
+        "</div>"
+      );
+    }
+
+
+    function renderEventCard(
+      value,
+      kind
+    ) {
+      return (
+        '<div class="event-card ' +
+          eventKindClass(kind) +
+        '">' +
+          escapeHtml(value) +
+        "</div>"
+      );
+    }
+
+
+    function eventKindClass(kind) {
+      switch (
+        String(
+          kind || ""
+        ).toUpperCase()
+      ) {
+        case "NEW_ACTOR_REHEARSAL":
+          return "new-actor-rehearsal";
+
+        case "UNDERSTUDY_REHEARSAL":
+          return "understudy-rehearsal";
+
+        case "EXCEPTION":
+          return "exception";
+
+        default:
+          return "standard";
+      }
+    }
+
+
+    /* =====================================================
+     * CELL EDITOR
+     * ===================================================== */
+
+    function openCellEditor(
+      personIndex,
+      dayIndex
+    ) {
+      const nextEditorKey =
+        personIndex +
+        ":" +
+        dayIndex;
+
+      if (
+        activeEditor &&
+        activeEditor.key ===
+          nextEditorKey
+      ) {
+        return;
+      }
+
+      if (activeEditor) {
+        saveActiveEditor();
+      }
+
+      const person =
+        payload.people[
+          personIndex
+        ];
+
+      const day =
+        person.days[
+          dayIndex
+        ];
+
+      const cell =
+        document.getElementById(
+          buildCellId(
+            personIndex,
+            dayIndex
+          )
+        );
+
+      if (!cell) {
+        return;
+      }
+
+      activeEditor = {
+        key:
+          nextEditorKey,
+
+        personIndex:
+          personIndex,
+
+        dayIndex:
+          dayIndex,
+
+        originalTop:
+          day.top || "",
+
+        originalBottom:
+          day.bottom || ""
+      };
+
+      cell.onclick = null;
+
+      cell.innerHTML =
+        '<div class="cell-editor">' +
+
+          '<div class="editor-field">' +
+            '<label class="editor-label">' +
+              "First payroll entry" +
+            "</label>" +
+
+            '<textarea ' +
+              'class="editor-textarea" ' +
+              'id="activeTopEditor">' +
+                escapeHtml(
+                  day.top || ""
+                ) +
+            "</textarea>" +
+          "</div>" +
+
+          '<div class="editor-field">' +
+            '<label class="editor-label">' +
+              "Second payroll entry" +
+            "</label>" +
+
+            '<textarea ' +
+              'class="editor-textarea" ' +
+              'id="activeBottomEditor">' +
+                escapeHtml(
+                  day.bottom || ""
+                ) +
+            "</textarea>" +
+          "</div>" +
+
+          '<div class="editor-buttons">' +
+
+            '<button ' +
+              'type="button" ' +
+              'class="mini-button cancel" ' +
+              'onclick="event.stopPropagation(); cancelActiveEditor();">' +
+                "Cancel" +
+            "</button>" +
+
+            '<button ' +
+              'type="button" ' +
+              'class="mini-button save" ' +
+              'onclick="event.stopPropagation(); saveActiveEditor();">' +
+                "Save" +
+            "</button>" +
+
+          "</div>" +
+
+        "</div>";
+
+      const topEditor =
+        document.getElementById(
+          "activeTopEditor"
+        );
+
+      if (topEditor) {
+        topEditor.focus();
+        topEditor.setSelectionRange(
+          topEditor.value.length,
+          topEditor.value.length
+        );
+      }
+    }
+
+
+    function saveActiveEditor() {
+      if (!activeEditor) {
+        return;
+      }
+
+      const topEditor =
+        document.getElementById(
+          "activeTopEditor"
+        );
+
+      const bottomEditor =
+        document.getElementById(
+          "activeBottomEditor"
+        );
+
+      const person =
+        payload.people[
+          activeEditor.personIndex
+        ];
+
+      const day =
+        person.days[
+          activeEditor.dayIndex
+        ];
+
+      day.top =
+        topEditor
+          ? topEditor.value
+          : day.top || "";
+
+      day.bottom =
+        bottomEditor
+          ? bottomEditor.value
+          : day.bottom || "";
+
+      day.topKind =
+        classifyEditedText(
+          day.top,
+          day
+        );
+
+      day.bottomKind =
+        classifyEditedText(
+          day.bottom,
+          day
+        );
+
+      const personIndex =
+        activeEditor.personIndex;
+
+      const dayIndex =
+        activeEditor.dayIndex;
+
+      activeEditor = null;
+
+      rerenderCell(
+        personIndex,
+        dayIndex
+      );
+
+      setStatus(
+        "Edit saved in preview. Nothing has written to Payroll."
+      );
+    }
+
+
+    function cancelActiveEditor() {
+      if (!activeEditor) {
+        return;
+      }
+
+      const personIndex =
+        activeEditor.personIndex;
+
+      const dayIndex =
+        activeEditor.dayIndex;
+
+      activeEditor = null;
+
+      rerenderCell(
+        personIndex,
+        dayIndex
+      );
+    }
+
+
+    function rerenderCell(
+      personIndex,
+      dayIndex
+    ) {
+      const person =
+        payload.people[
+          personIndex
+        ];
+
+      const day =
+        person.days[
+          dayIndex
+        ];
+
+      const cell =
+        document.getElementById(
+          buildCellId(
+            personIndex,
+            dayIndex
+          )
+        );
+
+      if (!cell) {
+        return;
+      }
+
+      cell.innerHTML =
+        renderDayDisplay(
+          day
+        );
+
+      cell.onclick =
+        function () {
+          openCellEditor(
+            personIndex,
+            dayIndex
+          );
+        };
+    }
+
+
+    function classifyEditedText(
+      value,
+      day
+    ) {
+      const text =
+        String(
+          value || ""
+        )
+          .trim()
+          .toLowerCase();
+
+      if (!text) {
+        return "EMPTY";
+      }
+
+      if (
+        /\bout\b/.test(text) ||
+        /\bin as\b/.test(text) ||
+        /\bcoverage\b/.test(text) ||
+        /\bcovering\b/.test(text) ||
+        /\breplacement\b/.test(text) ||
+        /\boffice show\b/.test(text)
+      ) {
+        return "EXCEPTION";
+      }
+
+      if (
+        /\bnew actor\b/.test(text) ||
+        /\bnew hire\b/.test(text) ||
+        (
+          day.isNewActorRehearsal &&
+          /\brehearsal\b/.test(text)
+        )
+      ) {
+        return "NEW_ACTOR_REHEARSAL";
+      }
+
+      if (
+        /\bu\/s\b/.test(text) ||
+        /\bunderstudy\b/.test(text) ||
+        /\bput[\s-]?in\b/.test(text) ||
+        /\bbrush[\s-]?up\b/.test(text) ||
+        (
+          day.isUnderstudyRehearsal &&
+          /\brehearsal\b/.test(text)
+        )
+      ) {
+        return "UNDERSTUDY_REHEARSAL";
+      }
+
+      return "STANDARD";
+    }
+
+
+    function buildCellId(
+      personIndex,
+      dayIndex
+    ) {
+      return (
+        "payrollCell_" +
+        personIndex +
+        "_" +
+        dayIndex
+      );
+    }
+
+
+    /* =====================================================
+     * NOTES
+     * ===================================================== */
+
+    function renderNotes() {
+      const noteCount =
+        Number(
+          payload.notesCount || 0
+        );
+
+      document.getElementById(
+        "notesCount"
+      ).textContent =
+        noteCount +
+        (
+          noteCount === 1
+            ? " note"
+            : " notes"
+        );
+
+      document.getElementById(
+        "notesPreview"
+      ).textContent =
+        payload.notesText ||
+        "No Payroll Notes generated.";
+    }
+
+
+    /* =====================================================
+     * WARNINGS
+     * ===================================================== */
+
+    function renderWarnings() {
+      const warnings =
+        payload.warnings || [];
+
+      document.getElementById(
+        "warningsCount"
+      ).textContent =
+        warnings.length +
+        (
+          warnings.length === 1
+            ? " warning"
+            : " warnings"
+        );
+
+      const container =
+        document.getElementById(
+          "warnings"
+        );
+
+      if (!warnings.length) {
+        container.innerHTML =
+          '<div class="no-warnings">' +
+            "✓ No blocking warnings found." +
+          "</div>";
+
+        return;
+      }
+
+      container.innerHTML =
+        warnings.map(
+          function (warning) {
+            const severity =
+              String(
+                warning.severity ||
+                "warning"
+              ).toLowerCase();
+
+            return (
+              '<div class="warning-item ' +
+                escapeHtml(severity) +
+              '">' +
+                escapeHtml(
+                  warning.message ||
+                  "Payroll warning"
+                ) +
+              "</div>"
+            );
+          }
+        ).join("");
+    }
+
+
+    /* =====================================================
+     * SUMMARY
+     * ===================================================== */
+
+    function renderSummary() {
+      const summary =
+        payload.summary || {};
+
+      const items = [
+        [
+          summary.people || 0,
+          "People"
+        ],
+        [
+          summary.stageManagers || 0,
+          "Stage Managers"
+        ],
+        [
+          summary.actors || 0,
+          "Actors"
+        ],
+        [
+          summary.outPerformances || 0,
+          "OUT Performances"
+        ],
+        [
+          summary.coveragePerformances || 0,
+          "Coverage"
+        ],
+        [
+          summary.missingCoverage || 0,
+          "Missing Coverage"
+        ],
+        [
+          summary.payrollNotes || 0,
+          "Payroll Notes"
+        ],
+        [
+          summary.warnings || 0,
+          "Warnings"
+        ]
+      ];
+
+      document.getElementById(
+        "summaryGrid"
+      ).innerHTML =
+        items.map(
+          function (item) {
+            return (
+              '<div class="summary-card">' +
+                '<div class="summary-number">' +
+                  escapeHtml(item[0]) +
+                "</div>" +
+
+                '<div class="summary-label">' +
+                  escapeHtml(item[1]) +
+                "</div>" +
+              "</div>"
+            );
+          }
+        ).join("");
+    }
+
+
+    /* =====================================================
+     * APPLY
+     * ===================================================== */
+
+    function applyPayroll() {
+      if (activeEditor) {
+        saveActiveEditor();
+      }
+
+      const applyButton =
+        document.getElementById(
+          "applyButton"
+        );
+
+      applyButton.disabled = true;
+
+      setStatus(
+        "Applying the reviewed Payroll schedule…"
+      );
+
+      google.script.run
+        .withSuccessHandler(
+          function (result) {
+            const cellsWritten =
+              result &&
+              result.payrollCellsWritten != null
+                ? result.payrollCellsWritten
+                : 0;
+
+            setStatus(
+              "Applied " +
+              cellsWritten +
+              " Payroll cells successfully."
+            );
+
+            applyButton.textContent =
+              "Applied";
+
+            setTimeout(
+              function () {
+                google.script.host.close();
+              },
+              1300
+            );
+          }
+        )
+        .withFailureHandler(
+          function (error) {
+            applyButton.disabled = false;
+
+            setStatus(
+              "Could not apply: " +
+              getErrorMessage(error)
+            );
+          }
+        )
+        .applyPayrollOSPreview({
+          schedule:
+            payload.schedule,
+
+          people:
+            payload.people
+        });
+    }
+
+
+    /* =====================================================
+     * GENERAL HELPERS
+     * ===================================================== */
+
+    function setStatus(message) {
+      document.getElementById(
+        "status"
+      ).textContent =
+        message;
+    }
+
+
+    function formatWeekLabel(
+      startValue,
+      endValue
+    ) {
+      const start =
+        parseDateValue(
+          startValue
+        );
+
+      const end =
+        parseDateValue(
+          endValue
+        );
+
+      if (
+        !start ||
+        !end
+      ) {
+        return (
+          String(
+            startValue || ""
+          ) +
+          " – " +
+          String(
+            endValue || ""
+          )
+        );
+      }
+
+      return (
+        start.toLocaleDateString(
+          undefined,
+          {
+            weekday: "short",
+            month: "short",
+            day: "numeric",
+            year: "numeric"
+          }
+        ) +
+        " – " +
+        end.toLocaleDateString(
+          undefined,
+          {
+            weekday: "short",
+            month: "short",
+            day: "numeric",
+            year: "numeric"
+          }
+        )
+      );
+    }
+
+
+    function parseDateValue(value) {
+      if (!value) {
+        return null;
+      }
+
+      const date =
+        new Date(
+          String(value) +
+          "T12:00:00"
+        );
+
+      return Number.isNaN(
+        date.getTime()
+      )
+        ? null
+        : date;
+    }
+
+
+    function getErrorMessage(error) {
+      if (
+        error &&
+        error.message
+      ) {
+        return error.message;
+      }
+
+      return String(
+        error || "Unknown error"
+      );
+    }
+
+
+    function escapeHtml(value) {
+      return String(
+        value == null
+          ? ""
+          : value
+      )
+        .replace(
+          /&/g,
+          "&amp;"
+        )
+        .replace(
+          /</g,
+          "&lt;"
+        )
+        .replace(
+          />/g,
+          "&gt;"
+        )
+        .replace(
+          /"/g,
+          "&quot;"
+        )
+        .replace(
+          /'/g,
+          "&#039;"
+        );
+    }
+  </script>
+</body>
+</html>
