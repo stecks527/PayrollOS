@@ -1,2045 +1,139 @@
 /*************************************************
- * 36 PAYROLLSCHEDULEOS - CORE
- * Version: 1.2.0
- * Status: ACTIVE / CANONICAL
+ * 36 PAYROLLNOTESWRITEROS
+ * Version: 1.1.0
+ * Status: ACTIVE
+ *
+ * Writes model-driven Payroll Notes directly into
+ * column B on the same row as the NOTES label.
+ *
+ * The notes remain normal editable sheet text.
  *************************************************/
 
-/*************************************************
- * PAYROLL SCHEDULE OS
- * Version: 1.2.0
- *
- * current()
- * - Returns the cached weekly model when available.
- * - Rebuilds and caches it when necessary.
- *
- * build()
- * - Forces a fresh rebuild of the current week.
- *************************************************/
-
-function PayrollScheduleOS() {
+function PayrollNotesWriterOS() {
   return {
-    /*
-     * Upcoming/current generator week.
-     * This intentionally continues to use the Weekly tab
-     * selected by getCurrentPayrollWeeklyScheduleSheet_().
-     */
-    current:
-      payrollScheduleOSCurrent_,
-
-    build:
-      payrollScheduleOSForceBuild_,
-
-    /*
-     * Explicit-week path.
-     * Used when Payroll Notes must rebuild the week already
-     * displayed on the Payroll sheet instead of the upcoming
-     * Weekly tab.
-     */
-    currentForSheet:
-      payrollScheduleOSCurrentForSheet_,
-
-    buildForSheet:
-      payrollScheduleOSForceBuildForSheet_,
-
-    clearCache:
-      payrollScheduleOSClearCache_,
-
-    status:
-      payrollScheduleOSStatus_,
-
-    test:
-      testPayrollScheduleOS
+    preview: payrollNotesWriterOSPreview_,
+    write: payrollNotesWriterOSWrite_,
+    test: testPayrollNotesWriterOS
   };
 }
 
 
 /* =========================================================
- * CURRENT WEEK
- *
- * Normal read path. Prefer the cached weekly model.
+ * PREVIEW
  * ========================================================= */
 
-function payrollScheduleOSCurrent_() {
-  const weekly =
-    getCurrentPayrollWeeklyScheduleSheet_();
+function payrollNotesWriterOSPreview_(notesResult) {
+  const notes =
+    notesResult ||
+    PayrollNotesOS().current();
 
-  if (!weekly) {
-    throw new Error(
-      "Current Weekly Schedule tab not found."
-    );
-  }
-
-  const cacheKey =
-    payrollScheduleOSCacheKey_(
-      weekly
-    );
-
-  const cached =
-    payrollScheduleOSGetCached_(
-      cacheKey
-    );
-
-  if (cached) {
-    Logger.log(
-      "PayrollScheduleOS source: cache"
-    );
-
-    return cached;
-  }
-
-  Logger.log(
-    "PayrollScheduleOS source: rebuilt"
-  );
-
-  const schedule =
-    payrollScheduleOSBuild_(
-      weekly
-    );
-
-  payrollScheduleOSSetCached_(
-    cacheKey,
-    schedule
-  );
-
-  return schedule;
+  return {
+    system: "PayrollNotesWriterOS",
+    version: "1.1.0",
+    weekStart: notes.weekStart,
+    weekEnd: notes.weekEnd,
+    text: notes.text,
+    counts: notes.counts,
+    missingCoverage: notes.missingCoverage
+  };
 }
 
 
 /* =========================================================
- * EXPLICIT WEEKLY SHEET
- *
- * These paths never choose a Weekly tab on their own.
- * The caller supplies the exact Weekly Schedule sheet.
+ * WRITE
  * ========================================================= */
 
-function payrollScheduleOSCurrentForSheet_(
-  weekly
-) {
-  payrollScheduleOSRequireWeeklySheet_(
-    weekly
-  );
-
-  const cacheKey =
-    payrollScheduleOSCacheKey_(
-      weekly
-    );
-
-  const cached =
-    payrollScheduleOSGetCached_(
-      cacheKey
-    );
-
-  if (cached) {
-    Logger.log(
-      "PayrollScheduleOS explicit source: cache"
-    );
-
-    return cached;
-  }
-
-  const schedule =
-    payrollScheduleOSBuild_(
-      weekly
-    );
-
-  payrollScheduleOSSetCached_(
-    cacheKey,
-    schedule
-  );
-
-  Logger.log(
-    "PayrollScheduleOS explicit source: rebuilt"
-  );
-
-  return schedule;
-}
-
-
-function payrollScheduleOSForceBuildForSheet_(
-  weekly
-) {
-  payrollScheduleOSRequireWeeklySheet_(
-    weekly
-  );
-
-  const cacheKey =
-    payrollScheduleOSCacheKey_(
-      weekly
-    );
-
-  const schedule =
-    payrollScheduleOSBuild_(
-      weekly
-    );
-
-  payrollScheduleOSSetCached_(
-    cacheKey,
-    schedule
-  );
-
-  Logger.log(
-    "PayrollScheduleOS explicit forced rebuild complete: " +
-    weekly.getName()
-  );
-
-  return schedule;
-}
-
-
-function payrollScheduleOSRequireWeeklySheet_(
-  weekly
-) {
-  if (
-    !weekly ||
-    typeof weekly.getName !==
-      "function"
-  ) {
-    throw new Error(
-      "A valid Weekly Schedule sheet is required."
-    );
-  }
-
-  if (
-    !/^Weekly Schedule Mon/i.test(
-      weekly.getName()
-    )
-  ) {
-    throw new Error(
-      'Expected a "Weekly Schedule Mon..." sheet, received "' +
-      weekly.getName() +
-      '".'
-    );
-  }
-}
-
-
-/* =========================================================
- * FORCED BUILD
- *
- * Developer/manual refresh path.
- * Always rebuilds and replaces the cache.
- * ========================================================= */
-
-function payrollScheduleOSForceBuild_() {
-  const weekly =
-    getCurrentPayrollWeeklyScheduleSheet_();
-
-  if (!weekly) {
-    throw new Error(
-      "Current Weekly Schedule tab not found."
-    );
-  }
-
-  const cacheKey =
-    payrollScheduleOSCacheKey_(
-      weekly
-    );
-
-  const schedule =
-    payrollScheduleOSBuild_(
-      weekly
-    );
-
-  payrollScheduleOSSetCached_(
-    cacheKey,
-    schedule
-  );
-
-  Logger.log(
-    "PayrollScheduleOS forced rebuild complete."
-  );
-
-  return schedule;
-}
-
-
-/* =========================================================
- * CACHE
- *
- * CacheService avoids Document Properties quota problems.
- * The cache survives separate Apps Script executions.
- * ========================================================= */
-
-function payrollScheduleOSCacheKey_(
-  weekly
-) {
-  const weeklyName =
-    weekly
-      ? weekly.getName()
-      : "NO_WEEKLY";
-
-  return (
-    "PAYROLL_SCHEDULE_OS_V1|" +
-    weeklyName
-  );
-}
-
-
-function payrollScheduleOSGetCached_(
-  cacheKey
-) {
-  try {
-    const cache =
-      CacheService
-        .getDocumentCache();
-
-    const raw =
-      cache.get(
-        cacheKey
-      );
-
-    if (!raw) {
-      return null;
-    }
-
-    const parsed =
-      JSON.parse(
-        raw
-      );
-
-    if (
-      !parsed ||
-      !parsed.schedule
-    ) {
-      return null;
-    }
-
-    return parsed.schedule;
-
-  } catch (err) {
-    Logger.log(
-      "PayrollScheduleOS cache read skipped: " +
-      String(err)
-    );
-
-    return null;
-  }
-}
-
-
-function payrollScheduleOSSetCached_(
-  cacheKey,
-  schedule
-) {
-  if (!schedule) {
-    return false;
-  }
-
-  try {
-    const payload =
-      JSON.stringify({
-        cachedAt:
-          new Date()
-            .toISOString(),
-
-        schedule:
-          schedule
-      });
-
-    /*
-     * CacheService allows a maximum of roughly
-     * 100 KB per key. Log and skip caching if this
-     * model ever grows beyond a safe threshold.
-     */
-    if (
-      payload.length >
-      95000
-    ) {
-      Logger.log(
-        "PayrollScheduleOS cache skipped because " +
-        "the serialized model is too large: " +
-        payload.length +
-        " characters."
-      );
-
-      return false;
-    }
-
-    CacheService
-      .getDocumentCache()
-      .put(
-        cacheKey,
-        payload,
-        21600
-      );
-
-    Logger.log(
-      "PayrollScheduleOS cache written: " +
-      payload.length +
-      " characters."
-    );
-
-    return true;
-
-  } catch (err) {
-    Logger.log(
-      "PayrollScheduleOS cache write skipped: " +
-      String(err)
-    );
-
-    return false;
-  }
-}
-
-
-function payrollScheduleOSClearCache_() {
-  const weekly =
-    getCurrentPayrollWeeklyScheduleSheet_();
-
-  if (!weekly) {
-    return false;
-  }
-
-  const cacheKey =
-    payrollScheduleOSCacheKey_(
-      weekly
-    );
-
-  CacheService
-    .getDocumentCache()
-    .remove(
-      cacheKey
-    );
-
-  Logger.log(
-    "PayrollScheduleOS cache cleared."
-  );
-
-  return true;
-}
-
-
-/* =========================================================
- * MANUAL CACHE CONTROLS
- * ========================================================= */
-
-function refreshPayrollScheduleOSCache() {
-  const schedule =
-    PayrollScheduleOS()
-      .build();
-
-  SpreadsheetApp
-    .getUi()
-    .alert(
-      "PayrollScheduleOS cache refreshed.\n\n" +
-      "Week: " +
-      (
-        schedule.weekStart ||
-        ""
-      ) +
-      " – " +
-      (
-        schedule.weekEnd ||
-        ""
-      ) +
-      "\n" +
-      "People: " +
-      (
-        schedule.counts
-          ? schedule.counts.people
-          : 0
-      ) +
-      "\n" +
-      "Outs: " +
-      (
-        schedule.counts
-          ? schedule.counts.outs
-          : 0
-      ) +
-      "\n" +
-      "Coverage: " +
-      (
-        schedule.counts
-          ? schedule.counts.coverage
-          : 0
-      )
-    );
-
-  return schedule;
-}
-
-
-function clearPayrollScheduleOSCache() {
-  PayrollScheduleOS()
-    .clearCache();
-
-  SpreadsheetApp
-    .getUi()
-    .alert(
-      "PayrollScheduleOS cache cleared.\n\n" +
-      "It will rebuild the next time it is needed."
-    );
-}
-
-function payrollScheduleOSBuild_(weekly) {
-  const startedAt = Date.now();
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const payroll = ss.getSheetByName("Payroll");
-  const castList = ss.getSheetByName("Cast List");
-
-  if (!payroll) throw new Error('Could not find "Payroll".');
-  if (!castList) throw new Error('Could not find "Cast List".');
-
-  const monday = getMondayDateFromWeekly_(weekly);
-
-const nameMap =
-  buildPayrollNameMap_(castList);
-
-const weeklyInfo =
-  readWeeklyForPayroll_(
-    weekly,
-    nameMap
-  );
-
-/*
- * NEW
- */
-const weeklyCoverageMap =
-  payrollScheduleOSBuildWeeklyCoverageMap_(
-    weekly,
-    monday
-  );
-
-const personBlocks =
-  getPayrollPersonBlocks_(payroll);
-
-const outDraft =
-  payrollBuildWeeklyOutDraft_(
-    monday
-  );
-
-const coverageLedger =
-  typeof prepGetCoverageLedger_ === "function"
-    ? prepGetCoverageLedger_()
-    : {};
-
-  const people = personBlocks.map(function(person) {
-    return {
-      name: person.fullName,
-      isStageManager: person.topRow < 19,
-      topRow: person.topRow,
-      bottomRow: person.bottomRow,
-      hoursRow: person.hoursRow,
-      days: []
-    };
-  });
-
-  const peopleByName = {};
-  people.forEach(function(person) {
-    peopleByName[payrollScheduleOSNameKey_(person.name)] = person;
-  });
-
-  weeklyInfo.forEach(function(day, dayIndex) {
-    people.forEach(function(person) {
-      person.days.push(
-        payrollScheduleOSBuildBaselineDay_(
-          person,
-          day,
-          dayIndex,
-          monday
-        )
-      );
-    });
-  });
-
-  (outDraft.days || []).forEach(function(draftDay, dayIndex) {
-    const weeklyDay = weeklyInfo[dayIndex];
-    if (!weeklyDay) return;
-
-    (draftDay.castOuts || []).forEach(function(out) {
-      const person =
-        peopleByName[payrollScheduleOSNameKey_(out.person)];
-
-      if (!person) return;
-
-      payrollScheduleOSApplyOut_(
-        person.days[dayIndex],
-        weeklyDay,
-        out
-      );
-    });
-  });
-
-  payrollScheduleOSApplyCoverageLedger_(
-    peopleByName,
-    weeklyInfo,
-    monday,
-    coverageLedger
-  );
-
-  payrollScheduleOSApplyWeeklyResolvedCoverage_(
-    peopleByName,
-    weeklyInfo,
-    monday,
-    weeklyCoverageMap
-  );
-
-  return {
-    system: "PayrollScheduleOS",
-    version: "1.2.0",
-    weeklySheet: weekly.getName(),
-    weekStart: payrollScheduleOSDateKey_(monday),
-    weekEnd: payrollScheduleOSDateKey_(
-      payrollScheduleOSAddDays_(monday, 6)
-    ),
-    people: people,
-    counts: {
-      people: people.length,
-      stageManagers: people.filter(p => p.isStageManager).length,
-      actors: people.filter(p => !p.isStageManager).length,
-      outs: payrollScheduleOSCountOuts_(people),
-      coverage: payrollScheduleOSCountCoverage_(people),
-      ledgerPerformances: Object.keys(coverageLedger || {}).length
-    },
-    durationMs: Date.now() - startedAt
-  };
-}
-
-/*************************************************
- * APPLY WEEKLY RESOLVED COVERAGE
- *
- * Prep ledger coverage takes priority.
- * This fills only performances that still have
- * an OUT record with no covering actor.
- *************************************************/
-
-function payrollScheduleOSApplyWeeklyResolvedCoverage_(
-  peopleByName,
-  weeklyInfo,
-  monday,
-  weeklyCoverageMap
-) {
-  let applied = 0;
-  const unresolved = [];
-
-  Object.keys(
-    peopleByName
-  ).forEach(
-    function (personKey) {
-      const outPerson =
-        peopleByName[personKey];
-
-      outPerson.days.forEach(
-        function (dayModel, dayIndex) {
-          const weeklyDay =
-            weeklyInfo[dayIndex];
-
-          if (!weeklyDay) {
-            return;
-          }
-
-          const targetDate =
-            payrollScheduleOSAddDays_(
-              monday,
-              dayIndex
-            );
-
-          const dateKey =
-            payrollScheduleOSDateKey_(
-              targetDate
-            );
-
-          (dayModel.outs || [])
-            .forEach(
-              function (out) {
-                /*
-                 * Swing outs may legitimately need
-                 * no replacement.
-                 */
-                if (
-                  !out.role ||
-                  /^swing$/i.test(
-                    String(
-                      out.role
-                    )
-                  ) ||
-                  out.noCoverNeeded ===
-                    true
-                ) {
-                  return;
-                }
-
-                /*
-                 * Do not replace exact coverage already
-                 * confirmed through the Prep ledger.
-                 */
-                if (
-                  payrollScheduleOSOutAlreadyCovered_(
-                    peopleByName,
-                    dayIndex,
-                    out
-                  )
-                ) {
-                  return;
-                }
-
-                let temporaryReplacement =
-                  null;
-
-                let coverName =
-                  "";
-
-                /*
-                 * Priority 1:
-                 * Temporary company replacement.
-                 */
-                if (
-                  typeof CompanyTemporaryReplacementOS ===
-                    "function"
-                ) {
-                  temporaryReplacement =
-                    CompanyTemporaryReplacementOS()
-                      .findForOut(
-                        out.person ||
-                          outPerson.name,
-                        out.role,
-                        targetDate
-                      );
-
-                  if (
-                    temporaryReplacement &&
-                    temporaryReplacement.replacement
-                  ) {
-                    coverName =
-                      String(
-                        temporaryReplacement.replacement
-                      ).trim();
-                  }
-                }
-
-                /*
-                 * Priority 2:
-                 * Prebuilt Weekly coverage map.
-                 */
-                if (!coverName) {
-                  coverName =
-                    payrollScheduleOSFindWeeklyCoverInMap_(
-                      weeklyCoverageMap,
-                      dateKey,
-                      out.role
-                    );
-                }
-
-                if (!coverName) {
-                  unresolved.push({
-                    out:
-                      out.person ||
-                      outPerson.name,
-
-                    role:
-                      out.role || "",
-
-                    date:
-                      dayModel.date,
-
-                    part:
-                      out.part ||
-                      "Unknown"
-                  });
-
-                  return;
-                }
-
-                const coverPerson =
-                  peopleByName[
-                    payrollScheduleOSNameKey_(
-                      coverName
-                    )
-                  ];
-
-                if (!coverPerson) {
-                  unresolved.push({
-                    out:
-                      out.person ||
-                      outPerson.name,
-
-                    role:
-                      out.role || "",
-
-                    date:
-                      dayModel.date,
-
-                    part:
-                      out.part ||
-                      "Unknown",
-
-                    issue:
-                      "Cover not found in Payroll roster: " +
-                      coverName
-                  });
-
-                  return;
-                }
-
-                const coverDay =
-                  coverPerson.days[
-                    dayIndex
-                  ];
-
-                if (!coverDay) {
-                  return;
-                }
-
-                payrollScheduleOSApplyWeeklyCoverage_(
-                  coverDay,
-                  out,
-                  coverName,
-                  dayModel.date,
-                  temporaryReplacement
-                    ? "Temporary Replacement Registry"
-                    : "Weekly Schedule"
-                );
-
-                applied++;
-              }
-            );
-        }
-      );
-    }
-  );
-
-  Logger.log(
-    "PAYROLLSCHEDULEOS WEEKLY COVERAGE"
-  );
-
-  Logger.log(
-    JSON.stringify(
-      {
-        applied:
-          applied,
-
-        unresolved:
-          unresolved
-      },
-      null,
-      2
-    )
-  );
-
-  return {
-    applied:
-      applied,
-
-    unresolved:
-      unresolved
-  };
-}
-
-/*************************************************
- * WEEKLY COVERAGE LOOKUP MAP
- *
- * Reads the current Weekly sheet once.
- *
- * Output:
- * {
- *   "2026-07-15": {
- *     "barfee": "Brandon L. Armstrong"
- *   }
- * }
- *************************************************/
-
-function payrollScheduleOSBuildWeeklyCoverageMap_(
-  weekly,
-  monday
-) {
-  const values =
-    weekly
-      .getDataRange()
-      .getDisplayValues();
-
-  const map = {};
-
-  let currentDateKey =
-    "";
-
-  for (
-    let rowIndex = 0;
-    rowIndex < values.length;
-    rowIndex++
-  ) {
-    const row =
-      values[rowIndex];
-
-    const rowText =
-      row
-        .join(" ")
-        .replace(/\s+/g, " ")
-        .trim();
-
-    const headerDate =
-      payrollScheduleOSParseWeeklyHeaderDate_(
-        rowText,
-        monday
-      );
-
-    if (headerDate) {
-      currentDateKey =
-        payrollScheduleOSDateKey_(
-          headerDate
-        );
-
-      if (!map[currentDateKey]) {
-        map[currentDateKey] =
-          {};
-      }
-
-      continue;
-    }
-
-    if (!currentDateKey) {
-      continue;
-    }
-
-    const assignment =
-      payrollScheduleOSParseWeeklyCoverageLine_(
-        rowText
-      );
-
-    if (!assignment) {
-      continue;
-    }
-
-    const fullCoverName =
-      typeof expandActorNameFromCastList_ ===
-        "function"
-        ? expandActorNameFromCastList_(
-            assignment.cover
-          )
-        : assignment.cover;
-
-    const roleKeys =
-      payrollScheduleOSWeeklyRoleKeys_(
-        assignment.role
-      );
-
-    roleKeys.forEach(
-      function (roleKey) {
-        map[currentDateKey][roleKey] =
-          fullCoverName;
-      }
-    );
-  }
-
-  Logger.log(
-    "PAYROLLSCHEDULEOS WEEKLY COVERAGE MAP"
-  );
-
-  Logger.log(
-    JSON.stringify(
-      map,
-      null,
-      2
-    )
-  );
-
-  return map;
-}
-
-function payrollScheduleOSParseWeeklyHeaderDate_(
-  rowText,
-  monday
-) {
-  const match =
-    String(
-      rowText || ""
-    ).match(
-      /\b(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),\s+([A-Za-z]+)\s+(\d{1,2})\b/i
-    );
-
-  if (!match) {
-    return null;
-  }
-
-  const year =
-    monday.getFullYear();
-
-  const parsed =
-    new Date(
-      match[2] +
-      " " +
-      match[3] +
-      ", " +
-      year +
-      " 12:00:00"
-    );
-
-  if (
-    isNaN(
-      parsed.getTime()
-    )
-  ) {
-    return null;
-  }
-
-  return parsed;
-}
-
-function payrollScheduleOSParseWeeklyCoverageLine_(
-  rowText
-) {
-  const cleanText =
-    String(
-      rowText || ""
-    )
-      .replace(/\s+/g, " ")
-      .trim();
-
-  if (!cleanText) {
-    return null;
-  }
-
-  /*
-   * Example:
-   * Kevin M. OUT, Barfée = Brandon A.
-   */
-  const match =
-    cleanText.match(
-      /\bOUT[, ]+\s*(.*?)\s*=\s*(.*?)$/i
-    );
-
-  if (!match) {
-    return null;
-  }
-
-  const role =
-    String(
-      match[1] || ""
-    ).trim();
-
-  const cover =
-    String(
-      match[2] || ""
-    ).trim();
-
-  if (
-    !role ||
-    !cover
-  ) {
-    return null;
-  }
-
-  return {
-    role:
-      role,
-
-    cover:
-      cover
-  };
-}
-
-function payrollScheduleOSFindWeeklyCoverInMap_(
-  weeklyCoverageMap,
-  dateKey,
-  roleName
-) {
-  const dateMap =
-    weeklyCoverageMap &&
-    weeklyCoverageMap[
-      dateKey
-    ]
-      ? weeklyCoverageMap[
-          dateKey
-        ]
-      : null;
-
-  if (!dateMap) {
-    return "";
-  }
-
-  const roleKeys =
-    payrollScheduleOSWeeklyRoleKeys_(
-      roleName
-    );
-
-  for (
-    let index = 0;
-    index < roleKeys.length;
-    index++
-  ) {
-    const cover =
-      dateMap[
-        roleKeys[index]
-      ];
-
-    if (cover) {
-      return cover;
-    }
-  }
-
-  return "";
-}
-
-function payrollScheduleOSWeeklyRoleKeys_(
-  roleName
-) {
-  const keys = [];
-
-  const normalized =
-    typeof normalizeCoverRole_ ===
-      "function"
-      ? normalizeCoverRole_(
-          roleName
-        )
-      : payrollScheduleOSNameKey_(
-          roleName
-        );
-
-  if (normalized) {
-    keys.push(
-      normalized
-    );
-  }
-
-  if (
-    typeof shortRoleNameForWeekly_ ===
-      "function"
-  ) {
-    const shortRole =
-      shortRoleNameForWeekly_(
-        roleName
-      );
-
-    const shortNormalized =
-      typeof normalizeCoverRole_ ===
-        "function"
-        ? normalizeCoverRole_(
-            shortRole
-          )
-        : payrollScheduleOSNameKey_(
-            shortRole
-          );
-
-    if (
-      shortNormalized &&
-      keys.indexOf(
-        shortNormalized
-      ) === -1
-    ) {
-      keys.push(
-        shortNormalized
-      );
-    }
-  }
-
-  return keys;
-}
-
-/*************************************************
- * CHECK WHETHER AN OUT ALREADY HAS COVERAGE
- *************************************************/
-
-function payrollScheduleOSOutAlreadyCovered_(
-  peopleByName,
-  dayIndex,
-  out
-) {
-  const outNameKey =
-    payrollScheduleOSNameKey_(
-      out.person
-    );
-
-  const roleKey =
-    payrollScheduleOSNameKey_(
-      out.role
-    );
-
-  const part =
-    String(
-      out.part || "Unknown"
-    );
-
-  return Object.keys(
-    peopleByName
-  ).some(
-    function (personKey) {
-      const person =
-        peopleByName[personKey];
-
-      const day =
-        person.days[
-          dayIndex
-        ];
-
-      if (!day) {
-        return false;
-      }
-
-      return (day.coverage || [])
-        .some(
-          function (coverage) {
-            return (
-              payrollScheduleOSNameKey_(
-                coverage.out
-              ) === outNameKey &&
-              payrollScheduleOSNameKey_(
-                coverage.role
-              ) === roleKey &&
-              String(
-                coverage.part || "Unknown"
-              ) === part
-            );
-          }
-        );
-    }
-  );
-}
-
-
-/*************************************************
- * APPLY ONE WEEKLY COVERAGE RECORD
- *************************************************/
-
-function payrollScheduleOSApplyWeeklyCoverage_(
-  coverDay,
-  out,
-  coverName,
-  dateKey,
-  source
-) {
-  const part =
-    out.part || "Unknown";
-
-  /*
-   * Remove the cover actor's normal SHOW call for
-   * this performance, but preserve rehearsal calls.
-   */
-  coverDay.calls =
-    coverDay.calls.filter(
-      function (call) {
-        return !(
-          call.type ===
-            "SHOW" &&
-          (
-            call.part === part ||
-            part === "Unknown"
-          )
-        );
-      }
-    );
-
-  const coverage = {
-    out:
-      out.person || "",
-
-    in:
-      coverName,
-
-    role:
-      out.role || "",
-
-    reason:
-      out.reason || "",
-
-    source:
-      source ||
-      "Weekly Schedule",
-
-    part:
-      part,
-
-    date:
-      dateKey,
-
-    performance:
-      "",
-
-    text:
-      "1 Show Call - IN as " +
-      (
-        out.role ||
-        "Cover"
-      )
-  };
-
-  const duplicate =
-    (coverDay.coverage || [])
-      .some(
-        function (existing) {
-          return (
-            payrollScheduleOSNameKey_(
-              existing.out
-            ) ===
-              payrollScheduleOSNameKey_(
-                coverage.out
-              ) &&
-            payrollScheduleOSNameKey_(
-              existing.in
-            ) ===
-              payrollScheduleOSNameKey_(
-                coverage.in
-              ) &&
-            payrollScheduleOSNameKey_(
-              existing.role
-            ) ===
-              payrollScheduleOSNameKey_(
-                coverage.role
-              ) &&
-            String(
-              existing.part || ""
-            ) ===
-              String(
-                coverage.part || ""
-              )
-          );
-        }
-      );
-
-  if (duplicate) {
-    return;
-  }
-
-  coverDay.coverage.push(
-    coverage
-  );
-
-  coverDay.calls.push({
-    type:
-      "COVERAGE",
-
-    part:
-      part,
-
-    role:
-      coverage.role,
-
-    out:
-      coverage.out,
-
-    source:
-      source ||
-      "Weekly Schedule",
-
-    text:
-      coverage.text
-  });
-}
-
-function payrollScheduleOSBuildBaselineDay_(
-  person,
-  day,
-  dayIndex,
-  monday
-) {
-  const date =
-    payrollScheduleOSAddDays_(
-      monday,
-      dayIndex
-    );
-
-  const hasRehearsal =
-    Boolean(
-      day.rehearsalText
-    );
-
-  const isCalledForRehearsal =
-    person.isStageManager ||
-    day.calledFullNames.has(
-      person.name
-    );
-
-  const showParts =
-    (day.showParts || [])
-      .slice();
-
-  const multipleShows =
-    showParts.length > 1;
-
-  const calls = [];
-
-  if (day.isOff) {
-    calls.push({
-      type:
-        "AEA_DAY_OFF",
-
-      part:
-        "",
-
-      text:
-        "AEA DAY OFF"
-    });
-
-  } else {
-    if (hasRehearsal) {
-      calls.push({
-        type:
-          isCalledForRehearsal
-            ? "REHEARSAL"
-            : "REHEARSAL_NOT_CALLED",
-
-        part:
-          "",
-
-        text:
-          isCalledForRehearsal
-            ? day.rehearsalText
-            : "Rehearsal\n(Not Called)",
-
-        hours:
-          Number(
-            day.rehearsalHours || 0
-          )
-      });
-    }
-
-    showParts.forEach(
-      function (part) {
-        calls.push({
-          type:
-            "SHOW",
-
-          part:
-            part,
-
-          text:
-            multipleShows
-              ? (
-                  part === "Mat"
-                    ? "1 Show Call - Mat"
-                    : part === "Eve"
-                      ? "1 Show Call - Eve"
-                      : "1 Show Call"
-                )
-              : "1 Show Call"
-        });
-      }
-    );
-  }
-
-  return {
-    date:
-      payrollScheduleOSDateKey_(
-        date
-      ),
-
-    isOff:
-      Boolean(
-        day.isOff
-      ),
-
-    rehearsalText:
-      day.rehearsalText || "",
-
-    rehearsalHours:
-      Number(
-        day.rehearsalHours || 0
-      ),
-
-    showParts:
-      showParts,
-
-    calls:
-      calls,
-
-    outs:
-      [],
-
-    coverage:
-      []
-  };
-}
-
-function payrollScheduleOSApplyOut_(dayModel, weeklyDay, out) {
-  const parts = payrollGetOutPartsForDay_(weeklyDay, out);
-  const reason = payrollGetOutReasonLabel_(out);
-
-  parts.forEach(function(part) {
-    dayModel.calls = dayModel.calls.filter(function(call) {
-      return !(
-        call.type === "SHOW" &&
-        (call.part === part || part === "Unknown")
-      );
-    });
-
-    dayModel.outs.push({
-      person: out.person || "",
-      role: out.role || "",
-      reason: reason,
-      part: part,
-      approvalStatus: out.approvalStatus || "",
-      appliesTo: out.appliesTo || "ALL",
-      text: "OUT (" + reason + ")"
-    });
-  });
-}
-
-function payrollScheduleOSApplyCoverageLedger_(
-  peopleByName,
-  weeklyInfo,
-  monday,
-  ledger
-) {
-  Object.keys(
-    ledger || {}
-  ).forEach(
-    function (key) {
-      const entry =
-        ledger[key] || {};
-
-      const dateKey =
-        payrollScheduleOSParseLedgerDateKey_(
-          entry.date
-        );
-
-      if (!dateKey) {
-        return;
-      }
-
-      const dayIndex =
-        payrollScheduleOSDayIndexFromDateKey_(
-          monday,
-          dateKey
-        );
-
-      if (
-        dayIndex < 0 ||
-        dayIndex > 6
-      ) {
-        return;
-      }
-
-      const weeklyDay =
-        weeklyInfo[dayIndex];
-
-      if (!weeklyDay) {
-        return;
-      }
-
-      const part =
-        payrollScheduleOSPerformancePart_(
-          entry.performance
-        );
-
-      (entry.castOuts || [])
-        .forEach(
-          function (ledgerOut) {
-            /*
-             * First apply the OUT to the person who is absent.
-             * This catches same-day callouts such as Cecilia,
-             * while deduplicating planned outs already supplied
-             * by WeeklyOS.
-             */
-            const outName =
-              String(
-                ledgerOut.out || ""
-              ).trim();
-
-            if (outName) {
-              const outPerson =
-                peopleByName[
-                  payrollScheduleOSNameKey_(
-                    outName
-                  )
-                ];
-
-              if (
-                outPerson &&
-                outPerson.days[dayIndex]
-              ) {
-                payrollScheduleOSApplyLedgerOut_(
-                  outPerson.days[dayIndex],
-                  part,
-                  ledgerOut
-                );
-              }
-            }
-
-            /*
-             * Then apply coverage to the person going IN.
-             */
-            const inName =
-              String(
-                ledgerOut.in || ""
-              ).trim();
-
-            if (
-              !inName ||
-              ledgerOut.noCoverNeeded ===
-                true
-            ) {
-              return;
-            }
-
-            const inPerson =
-              peopleByName[
-                payrollScheduleOSNameKey_(
-                  inName
-                )
-              ];
-
-            if (
-              !inPerson ||
-              !inPerson.days[dayIndex]
-            ) {
-              return;
-            }
-
-            payrollScheduleOSApplyCoverage_(
-              inPerson.days[dayIndex],
-              part,
-              ledgerOut,
-              entry
-            );
-          }
-        );
-    }
-  );
-}
-
-function payrollScheduleOSApplyLedgerOut_(
-  dayModel,
-  part,
-  ledgerOut
-) {
-  const normalizedPart =
-    part || "Unknown";
-
-  const reason =
-    String(
-      ledgerOut.reason || "Out"
-    ).trim();
-
-  /*
-   * Replace the normal show call for the affected
-   * performance. Preserve rehearsal calls.
-   */
-  dayModel.calls =
-    dayModel.calls.filter(
-      function (call) {
-        return !(
-          call.type ===
-            "SHOW" &&
-          (
-            call.part ===
-              normalizedPart ||
-            normalizedPart ===
-              "Unknown"
-          )
-        );
-      }
-    );
-
-  const duplicate =
-    dayModel.outs.some(
-      function (existing) {
-        return (
-          payrollScheduleOSNameKey_(
-            existing.person
-          ) ===
-            payrollScheduleOSNameKey_(
-              ledgerOut.out
-            ) &&
-          String(
-            existing.part || ""
-          ) ===
-            String(
-              normalizedPart
-            )
-        );
-      }
-    );
-
-  if (duplicate) {
-    return;
-  }
-
-  dayModel.outs.push({
-    person:
-      ledgerOut.out || "",
-
-    role:
-      ledgerOut.role || "",
-
-    reason:
-      reason,
-
-    part:
-      normalizedPart,
-
-    approvalStatus:
-      "",
-
-    appliesTo:
-      normalizedPart,
-
-    source:
-      ledgerOut.source || "Prep",
-
-    noCoverNeeded:
-      ledgerOut.noCoverNeeded === true,
-
-    writeToInOutSheet:
-      ledgerOut.writeToInOutSheet !==
-        false,
-
-    text:
-      "OUT (" +
-      reason +
-      ")"
-  });
-}
-
-function payrollScheduleOSApplyCoverage_(
-  dayModel,
-  part,
-  coverageEntry,
-  ledgerEntry
-) {
-  const normalizedPart = part || "Unknown";
-
-  dayModel.calls = dayModel.calls.filter(function(call) {
-    return !(
-      call.type === "SHOW" &&
-      (
-        call.part === normalizedPart ||
-        normalizedPart === "Unknown"
-      )
-    );
-  });
-
-  const coverage = {
-    out: coverageEntry.out || "",
-    in: coverageEntry.in || "",
-    role: coverageEntry.role || "",
-    reason: coverageEntry.reason || "",
-    source: coverageEntry.source || "",
-    part: normalizedPart,
-    date: ledgerEntry.date || "",
-    performance: ledgerEntry.performance || "",
-    text:
-      "1 Show Call - IN as " +
-      (coverageEntry.role || "Cover")
-  };
-
-  const duplicate = dayModel.coverage.some(function(item) {
-    return (
-      payrollScheduleOSNameKey_(item.out) ===
-        payrollScheduleOSNameKey_(coverage.out) &&
-      payrollScheduleOSNameKey_(item.in) ===
-        payrollScheduleOSNameKey_(coverage.in) &&
-      payrollScheduleOSNameKey_(item.role) ===
-        payrollScheduleOSNameKey_(coverage.role) &&
-      String(item.part || "") === String(coverage.part || "")
-    );
-  });
-
-  if (duplicate) return;
-
-  dayModel.coverage.push(coverage);
-  dayModel.calls.push({
-    type: "COVERAGE",
-    part: normalizedPart,
-    role: coverage.role,
-    out: coverage.out,
-    text: coverage.text
-  });
-}
-
-function payrollScheduleOSParseLedgerDateKey_(dateText) {
-  if (!dateText) return "";
-
-  if (typeof parseInOutDate_ === "function") {
-    const parsed = parseInOutDate_(dateText);
-
-    if (
-      parsed instanceof Date &&
-      !isNaN(parsed.getTime())
-    ) {
-      return payrollScheduleOSDateKey_(parsed);
-    }
-  }
-
-  const year = new Date().getFullYear();
-  const parsed = new Date(String(dateText || "") + ", " + year);
-
-  return isNaN(parsed.getTime())
-    ? ""
-    : payrollScheduleOSDateKey_(parsed);
-}
-
-function payrollScheduleOSDayIndexFromDateKey_(
-  monday,
-  dateKey
-) {
-  const target = new Date(dateKey + "T12:00:00");
-  const base = new Date(monday);
-  base.setHours(12, 0, 0, 0);
-
-  return Math.round(
-    (target.getTime() - base.getTime()) /
-    (24 * 60 * 60 * 1000)
-  );
-}
-
-function payrollScheduleOSPerformancePart_(performanceText) {
-  const text = String(performanceText || "");
-
-  if (/MAT(?:INEE)?/i.test(text)) return "Mat";
-  if (/EVE(?:NING)?/i.test(text)) return "Eve";
-
-  const match = text.match(
-    /(\d{1,2}):(\d{2})\s*(AM|PM)/i
-  );
-
-  if (!match) return "Unknown";
-
-  let hour = Number(match[1]);
-  const ampm = match[3].toUpperCase();
-
-  if (ampm === "PM" && hour !== 12) hour += 12;
-  if (ampm === "AM" && hour === 12) hour = 0;
-
-  return hour < 17 ? "Mat" : "Eve";
-}
-
-function payrollScheduleOSStatus_() {
-  const current = payrollScheduleOSCurrent_();
-
-  return {
-    system: current.system,
-    version: current.version,
-    weeklySheet: current.weeklySheet,
-    weekStart: current.weekStart,
-    weekEnd: current.weekEnd,
-    people: current.counts.people,
-    stageManagers: current.counts.stageManagers,
-    actors: current.counts.actors,
-    outs: current.counts.outs,
-    coverage: current.counts.coverage,
-    ledgerPerformances:
-      current.counts.ledgerPerformances,
-    durationMs: current.durationMs
-  };
-}
-
-function payrollScheduleOSNameKey_(value) {
-  return String(value || "")
-    .toLowerCase()
-    .replace(/\./g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function payrollScheduleOSDateKey_(date) {
-  return Utilities.formatDate(
-    date,
-    Session.getScriptTimeZone(),
-    "yyyy-MM-dd"
-  );
-}
-
-function payrollScheduleOSAddDays_(date, numberOfDays) {
-  const output = new Date(date);
-  output.setDate(output.getDate() + numberOfDays);
-  return output;
-}
-
-function payrollScheduleOSCountOuts_(people) {
-  return people.reduce(function(total, person) {
-    return total + person.days.reduce(function(dayTotal, day) {
-      return dayTotal + day.outs.length;
-    }, 0);
-  }, 0);
-}
-
-function payrollScheduleOSCountCoverage_(people) {
-  return people.reduce(function(total, person) {
-    return total + person.days.reduce(function(dayTotal, day) {
-      return dayTotal + day.coverage.length;
-    }, 0);
-  }, 0);
-}
-
-function testPayrollScheduleOS() {
-  const schedule = PayrollScheduleOS().current();
-
-  const sampleNames = [
-    "Rachel A. Zucker",
-    "Justin Cooley",
-    "Kevin McHale",
-    "Brandon L. Armstrong",
-    "Fernell Hogan",
-    "Cecilia Snow",
-    "Jahbril Cook"
-  ];
-
-  const samples = schedule.people
-    .filter(person => sampleNames.includes(person.name))
-    .map(function(person) {
-      return {
-        name: person.name,
-        days: person.days.map(function(day) {
-          return {
-            date: day.date,
-            calls: day.calls.map(function(call) {
-              return {
-                type: call.type,
-                part: call.part,
-                text: call.text,
-                role: call.role || "",
-                out: call.out || ""
-              };
-            }),
-            outs: day.outs,
-            coverage: day.coverage
-          };
-        })
-      };
-    });
-
-    Logger.log(
-    "PAYROLLSCHEDULEOS V1.0 TEST"
-  );
-
-  Logger.log(
-    JSON.stringify(
-      {
-        status:
-          payrollScheduleOSStatus_(),
-
-        samples:
-          samples
-      },
-      null,
-      2
-    )
-  );
-
-  SpreadsheetApp
-    .getUi()
-    .alert(
-      [
-        "PayrollScheduleOS v1.0 test complete.",
-        "",
-        "Week: " +
-          schedule.weekStart +
-          " through " +
-          schedule.weekEnd,
-        "People: " +
-          schedule.counts.people,
-        "OUT records: " +
-          schedule.counts.outs,
-        "Coverage records: " +
-          schedule.counts.coverage,
-        "Ledger performances: " +
-          schedule.counts.ledgerPerformances,
-        "",
-        "Open the execution log for sample schedules."
-      ].join("\n")
-    );
-
-  return schedule;
-}
-
-function debugPayrollLeanaEmilyCorrectWeek() {
-  const WEEKLY_SHEET_NAME =
-    "Weekly Schedule Mon 7.13.26 - Sun 7.19.26";
-
-  const TARGET_DATE =
-    "2026-07-18";
+function payrollNotesWriterOSWrite_(notesResult) {
+  const startedAt =
+    Date.now();
 
   const ss =
     SpreadsheetApp.getActiveSpreadsheet();
 
-  const weekly =
-    ss.getSheetByName(
-      WEEKLY_SHEET_NAME
-    );
+  const payroll =
+    ss.getSheetByName("Payroll");
 
-  if (!weekly) {
+  if (!payroll) {
     throw new Error(
-      'Could not find "' +
-      WEEKLY_SHEET_NAME +
-      '".'
+      'Could not find the "Payroll" tab.'
     );
   }
 
   /*
-   * Build directly from the requested Weekly tab.
-   * This intentionally bypasses current() and its cache.
+   * Accept a prebuilt PayrollNotesOS result when the
+   * full Payroll workflow has already built the model.
+   *
+   * When run independently, build the notes here.
    */
-  const schedule =
-    payrollScheduleOSBuild_(
-      weekly
+  const notes =
+    notesResult ||
+    PayrollNotesOS().current();
+
+  const notesCell =
+    payrollNotesWriterOSFindNotesCell_(
+      payroll
     );
 
-  function findPersonDay(
-    personName
-  ) {
-    const wantedKey =
-      payrollScheduleOSNameKey_(
-        personName
-      );
-
-    const person =
-      (schedule.people || [])
-        .find(function (item) {
-          return (
-            payrollScheduleOSNameKey_(
-              item.name
-            ) === wantedKey
-          );
-        });
-
-    if (!person) {
-      return {
-        personFound:
-          false,
-
-        day:
-          null
-      };
-    }
-
-    const day =
-      (person.days || [])
-        .find(function (item) {
-          return (
-            item.date ===
-            TARGET_DATE
-          );
-        }) || null;
-
-    return {
-      personFound:
-        true,
-
-      person:
-        person.name,
-
-      day:
-        day
-    };
+  if (!notesCell) {
+    throw new Error(
+      'Could not find "NOTES" in column A on Payroll.'
+    );
   }
 
+  const text =
+    String(notes.text || "");
+
+  notesCell.clearContent();
+
+  notesCell
+    .setValue(text)
+    .setWrap(true)
+    .setVerticalAlignment("top");
+
+  SpreadsheetApp.flush();
+
+  const writtenText =
+    notesCell.getDisplayValue();
+
   const result = {
-    weeklySheet:
-      schedule.weeklySheet,
+    success:
+      true,
 
     weekStart:
-      schedule.weekStart,
+      notes.weekStart,
 
     weekEnd:
-      schedule.weekEnd,
+      notes.weekEnd,
 
-    targetDate:
-      TARGET_DATE,
+    notesCell:
+      notesCell.getA1Notation(),
 
-    leana:
-      findPersonDay(
-        "Leana Rae Concepcion"
-      ),
+    writtenCells: [
+      notesCell.getA1Notation()
+    ],
 
-    emily:
-      findPersonDay(
-        "Emily N. Rudolph"
-      ),
+    outGroups:
+      notes.counts.outGroups,
 
-    counts:
-      schedule.counts
+    outPerformances:
+      notes.counts.outPerformances,
+
+    coveragePerformances:
+      notes.counts.coveragePerformances,
+
+    missingCoveragePerformances:
+      notes.counts
+        .missingCoveragePerformances,
+
+    matchesModel:
+      writtenText === text,
+
+    durationMs:
+      Date.now() - startedAt
   };
 
   Logger.log(
-    "PAYROLL LEANA / EMILY CORRECT WEEK DEBUG"
+    "PAYROLLNOTESWRITEROS WRITE"
   );
 
   Logger.log(
@@ -2049,6 +143,116 @@ function debugPayrollLeanaEmilyCorrectWeek() {
       2
     )
   );
+
+  return result;
+}
+
+
+/* =========================================================
+ * FIND NOTES CELL
+ * ========================================================= */
+
+function payrollNotesWriterOSFindNotesCell_(
+  payroll
+) {
+  const lastRow =
+    payroll.getLastRow();
+
+  if (lastRow < 1) {
+    return null;
+  }
+
+  const labels =
+    payroll
+      .getRange(
+        1,
+        1,
+        lastRow,
+        1
+      )
+      .getDisplayValues();
+
+  for (
+    let rowIndex = 0;
+    rowIndex < labels.length;
+    rowIndex++
+  ) {
+    const label =
+      String(
+        labels[rowIndex][0] || ""
+      )
+        .trim()
+        .toUpperCase();
+
+    if (label === "NOTES") {
+      /*
+       * rowIndex is zero-based.
+       * NOTES is in column A.
+       * Write into column B on the same row.
+       */
+      return payroll.getRange(
+        rowIndex + 1,
+        2
+      );
+    }
+  }
+
+  return null;
+}
+
+
+/* =========================================================
+ * PUBLIC COMPATIBILITY WRAPPER
+ * ========================================================= */
+
+function refreshPayrollNotesFromModel(
+  notesResult
+) {
+  return PayrollNotesWriterOS()
+    .write(notesResult);
+}
+
+
+/* =========================================================
+ * TEST
+ * ========================================================= */
+
+function testPayrollNotesWriterOS() {
+  const result =
+    PayrollNotesWriterOS()
+      .write();
+
+  SpreadsheetApp
+    .getUi()
+    .alert(
+      [
+        "Payroll Notes write complete.",
+        "",
+        "Week: " +
+          result.weekStart +
+          " through " +
+          result.weekEnd,
+        "Notes cell: " +
+          result.notesCell,
+        "OUT groups: " +
+          result.outGroups,
+        "OUT performances: " +
+          result.outPerformances,
+        "Coverage performances: " +
+          result.coveragePerformances,
+        "Missing coverage: " +
+          result.missingCoveragePerformances,
+        "Written text matches model: " +
+          (
+            result.matchesModel
+              ? "YES"
+              : "NO"
+          ),
+        "Duration: " +
+          result.durationMs +
+          " ms"
+      ].join("\n")
+    );
 
   return result;
 }
