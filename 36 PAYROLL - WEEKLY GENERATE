@@ -1,0 +1,1542 @@
+/*************************************************
+ * 36 PAYROLL - WEEKLY GENERATE
+ * Version: 2.1.0
+ * Status: ACTIVE / CANONICAL
+ *
+ * Single public Payroll generation pipeline.
+ *
+ * PayrollScheduleOS owns every scheduling decision.
+ * PayrollWriterOS writes the call grid.
+ * PayrollNotesOS builds notes from the same model.
+ * PayrollNotesWriterOS writes editable notes.
+ *
+ * No direct IN/OUT-to-Payroll cell patching.
+ * No PAYROLLNOTES formula refresh.
+ *************************************************/
+
+
+/* =========================================================
+ * PUBLIC PAYROLLOS API
+ * ========================================================= */
+
+function PayrollOS() {
+  return {
+    refresh:
+      payrollOSRefresh_,
+
+    current:
+      payrollOSCurrent_,
+
+    notes:
+      payrollOSRefreshNotesOnly_,
+
+    clearCache:
+      payrollOSClearCache_,
+
+    status:
+      payrollOSStatus_
+  };
+}
+
+
+/* =========================================================
+ * PUBLIC MENU / LEGACY ENTRY POINT
+ * ========================================================= */
+
+function fillPayrollFromCurrentWeekly() {
+  return PayrollOS().refresh({
+    forceBuild:
+      true,
+
+    writeGrid:
+      true,
+
+    writeNotes:
+      true,
+
+    showAlert:
+      true
+  });
+}
+
+
+/* =========================================================
+ * CANONICAL REFRESH
+ * ========================================================= */
+
+function payrollOSRefresh_(
+  options
+) {
+  options =
+    Object.assign(
+      {
+        forceBuild:
+          true,
+
+        writeGrid:
+          true,
+
+        writeNotes:
+          true,
+
+        showAlert:
+          false
+      },
+      options || {}
+    );
+
+  const startedAt =
+    Date.now();
+
+  const ss =
+    SpreadsheetApp
+      .getActiveSpreadsheet();
+
+  const payroll =
+    ss.getSheetByName(
+      "Payroll"
+    );
+
+  const weekly =
+    getCurrentPayrollWeeklyScheduleSheet_();
+
+  if (!payroll) {
+    throw new Error(
+      'Could not find the "Payroll" tab.'
+    );
+  }
+
+  if (!weekly) {
+    throw new Error(
+      "Current Weekly Schedule tab not found."
+    );
+  }
+
+  payrollOSRequireCanonicalModules_();
+
+  /*
+   * Build the structured weekly model exactly once.
+   *
+   * forceBuild=true is the safe path after Prep, Weekly,
+   * PD/Vacation, or company-state changes.
+   */
+  const schedule =
+    options.forceBuild
+      ? PayrollScheduleOS()
+          .build()
+      : PayrollScheduleOS()
+          .current();
+
+  const notes =
+    PayrollNotesOS()
+      .build(
+        schedule
+      );
+
+  /*
+   * Keep the displayed week-start date synchronized with
+   * the Weekly sheet selected by PayrollScheduleOS.
+   */
+  payroll
+  .getRange("D2")
+  .setValue(
+    getMondayDateFromWeekly_(
+      weekly
+    )
+  );
+
+  const payrollResult =
+    options.writeGrid
+      ? PayrollWriterOS()
+          .write(
+            schedule
+          )
+      : {
+          success:
+            true,
+
+          writes:
+            0,
+
+          notes: []
+        };
+
+  const notesResult =
+    options.writeNotes
+      ? PayrollNotesWriterOS()
+          .write(
+            notes
+          )
+      : {
+          success:
+            true,
+
+          writtenCells:
+            [],
+
+          missingCoveragePerformances:
+            notes.counts
+              .missingCoveragePerformances
+        };
+
+  const result = {
+    success:
+      Boolean(
+        payrollResult.success &&
+        notesResult.success
+      ),
+
+    source:
+      "PayrollScheduleOS",
+
+    weeklySheet:
+      schedule.weeklySheet,
+
+    weekStart:
+      schedule.weekStart,
+
+    weekEnd:
+      schedule.weekEnd,
+
+    people:
+      schedule.counts.people,
+
+    outPerformances:
+      schedule.counts.outs,
+
+    coveragePerformances:
+      schedule.counts.coverage,
+
+    payrollCellsWritten:
+      payrollResult.writes || 0,
+
+    payrollNotesWritten:
+      Boolean(
+        options.writeNotes &&
+        notesResult.success
+      ),
+
+    notesCells:
+      notesResult.writtenCells || [],
+
+    missingCoverage:
+      notesResult
+        .missingCoveragePerformances || 0,
+
+    writerNotes:
+      payrollResult.notes || [],
+
+    durationMs:
+      Date.now() -
+      startedAt
+  };
+
+  Logger.log(
+    "PAYROLLOS CANONICAL REFRESH"
+  );
+
+  Logger.log(
+    JSON.stringify(
+      result,
+      null,
+      2
+    )
+  );
+
+  if (
+    options.showAlert
+  ) {
+    SpreadsheetApp
+      .getUi()
+      .alert(
+        [
+          "Payroll generated successfully.",
+          "",
+          "Week: " +
+            result.weekStart +
+            " through " +
+            result.weekEnd,
+          "People: " +
+            result.people,
+          "OUT performances: " +
+            result.outPerformances,
+          "Coverage performances: " +
+            result.coveragePerformances,
+          "Missing coverage: " +
+            result.missingCoverage,
+          "Payroll cells written: " +
+            result.payrollCellsWritten,
+          "Notes written to: " +
+            (
+              result.notesCells.length
+                ? result.notesCells.join(", ")
+                : "Not requested"
+            ),
+          "Duration: " +
+            result.durationMs +
+            " ms"
+        ].join("\n")
+      );
+  }
+
+  return result;
+}
+
+
+/* =========================================================
+ * NORMAL READ
+ * ========================================================= */
+
+function payrollOSCurrent_() {
+  payrollOSRequireCanonicalModules_();
+
+  const schedule =
+    PayrollScheduleOS()
+      .current();
+
+  const notes =
+    PayrollNotesOS()
+      .build(
+        schedule
+      );
+
+  return {
+    schedule:
+      schedule,
+
+    notes:
+      notes
+  };
+}
+
+
+/* =========================================================
+ * NOTES-ONLY COMPATIBILITY PATH
+ *
+ * Uses the canonical schedule model and writes normal text.
+ * It never restores a PAYROLLNOTES formula.
+ * ========================================================= */
+
+function payrollOSRefreshNotesOnly_(
+  options
+) {
+  options =
+    Object.assign(
+      {
+        forceBuild:
+          true,
+
+        showAlert:
+          false
+      },
+      options || {}
+    );
+
+  const startedAt =
+    Date.now();
+
+  payrollOSRequireCanonicalModules_();
+
+  const weekly =
+    getPayrollDisplayedWeeklyScheduleSheet_();
+
+  const schedule =
+    options.forceBuild
+      ? PayrollScheduleOS()
+          .buildForSheet(
+            weekly
+          )
+      : PayrollScheduleOS()
+          .currentForSheet(
+            weekly
+          );
+
+  const notes =
+    PayrollNotesOS()
+      .build(
+        schedule
+      );
+
+  const notesResult =
+    PayrollNotesWriterOS()
+      .write(
+        notes
+      );
+
+  const result = {
+    success:
+      notesResult.success === true,
+
+    source:
+      "PayrollScheduleOS displayed-week build",
+
+    weeklySheet:
+      schedule.weeklySheet,
+
+    weekStart:
+      schedule.weekStart,
+
+    weekEnd:
+      schedule.weekEnd,
+
+    people:
+      schedule.counts.people,
+
+    outPerformances:
+      schedule.counts.outs,
+
+    coveragePerformances:
+      schedule.counts.coverage,
+
+    payrollCellsWritten:
+      0,
+
+    payrollNotesWritten:
+      notesResult.success === true,
+
+    notesCells:
+      notesResult.writtenCells || [],
+
+    missingCoverage:
+      notesResult
+        .missingCoveragePerformances || 0,
+
+    durationMs:
+      Date.now() -
+      startedAt
+  };
+
+  Logger.log(
+    "PAYROLLOS DISPLAYED-WEEK NOTES REFRESH"
+  );
+
+  Logger.log(
+    JSON.stringify(
+      result,
+      null,
+      2
+    )
+  );
+
+  if (
+    options.showAlert
+  ) {
+    SpreadsheetApp
+      .getUi()
+      .alert(
+        [
+          "Payroll Notes updated successfully.",
+          "",
+          "Weekly source: " +
+            result.weeklySheet,
+          "Week: " +
+            result.weekStart +
+            " through " +
+            result.weekEnd,
+          "OUT performances: " +
+            result.outPerformances,
+          "Coverage performances: " +
+            result.coveragePerformances,
+          "Missing coverage: " +
+            result.missingCoverage,
+          "Notes written to: " +
+            (
+              result.notesCells.length
+                ? result.notesCells.join(", ")
+                : "None"
+            ),
+          "Payroll grid changed: NO",
+          "Duration: " +
+            result.durationMs +
+            " ms"
+        ].join("\n")
+      );
+  }
+
+  return result;
+}
+
+
+/*
+ * Public manual/menu entry point for updating only the
+ * Payroll Notes belonging to the dates already displayed
+ * across Payroll!B3:H3.
+ */
+function updateCurrentPayrollNotes() {
+  return PayrollOS()
+    .notes({
+      forceBuild:
+        true,
+
+      showAlert:
+        true
+    });
+}
+
+
+/* =========================================================
+ * CACHE
+ * ========================================================= */
+
+function payrollOSClearCache_() {
+  if (
+    typeof PayrollScheduleOS !==
+    "function"
+  ) {
+    return false;
+  }
+
+  return PayrollScheduleOS()
+    .clearCache();
+}
+
+
+/* =========================================================
+ * STATUS
+ * ========================================================= */
+
+function payrollOSStatus_() {
+  return {
+    system:
+      "PayrollOS",
+
+    version:
+      "2.1.0",
+
+    scheduleOSAvailable:
+      typeof PayrollScheduleOS ===
+      "function",
+
+    writerOSAvailable:
+      typeof PayrollWriterOS ===
+      "function",
+
+    notesOSAvailable:
+      typeof PayrollNotesOS ===
+      "function",
+
+    notesWriterOSAvailable:
+      typeof PayrollNotesWriterOS ===
+      "function",
+
+    canonical:
+      true
+  };
+}
+
+
+/* =========================================================
+ * MODULE GUARD
+ * ========================================================= */
+
+function payrollOSRequireCanonicalModules_() {
+  const missing = [];
+
+  if (
+    typeof PayrollScheduleOS !==
+    "function"
+  ) {
+    missing.push(
+      "PayrollScheduleOS"
+    );
+  }
+
+  if (
+    typeof PayrollWriterOS !==
+    "function"
+  ) {
+    missing.push(
+      "PayrollWriterOS"
+    );
+  }
+
+  if (
+    typeof PayrollNotesOS !==
+    "function"
+  ) {
+    missing.push(
+      "PayrollNotesOS"
+    );
+  }
+
+  if (
+    typeof PayrollNotesWriterOS !==
+    "function"
+  ) {
+    missing.push(
+      "PayrollNotesWriterOS"
+    );
+  }
+
+  if (
+    missing.length
+  ) {
+    throw new Error(
+      "Canonical PayrollOS modules missing:\n" +
+      missing.join("\n")
+    );
+  }
+}
+
+
+/* =========================================================
+ * QUIET POST-PREP REFRESH
+ * ========================================================= */
+
+function refreshPayrollFromCanonicalModel_() {
+  /*
+   * Prep is working on the current performance/week.
+   * It must refresh only the notes for the week already
+   * displayed on Payroll. It must never run the upcoming
+   * Payroll generator or rewrite the Payroll grid.
+   */
+  return PayrollOS()
+    .notes({
+      forceBuild:
+        true,
+
+      showAlert:
+        false
+    });
+}
+
+function setPayrollCell_(
+  range,
+  text
+) {
+  if (!range) return;
+
+  text =
+    String(
+      text || ""
+    );
+
+  if (!text) {
+    range.clearContent();
+    return;
+  }
+
+  const normalStyle =
+    SpreadsheetApp
+      .newTextStyle()
+      .setBold(false)
+      .build();
+
+  const boldStyle =
+    SpreadsheetApp
+      .newTextStyle()
+      .setBold(true)
+      .build();
+
+  const builder =
+    SpreadsheetApp
+      .newRichTextValue()
+      .setText(text)
+      .setTextStyle(
+        normalStyle
+      );
+
+  const phrasesToBold = [
+    "Rehearsal",
+    "1 Show Call",
+    "1 Show Call - Mat",
+    "1 Show Call - Eve",
+    "AEA DAY OFF",
+    "OUT"
+  ];
+
+  phrasesToBold.forEach(
+    function (phrase) {
+      let start =
+        text.indexOf(
+          phrase
+        );
+
+      while (
+        start !== -1
+      ) {
+        builder.setTextStyle(
+          start,
+          start +
+            phrase.length,
+          boldStyle
+        );
+
+        start =
+          text.indexOf(
+            phrase,
+            start + 1
+          );
+      }
+    }
+  );
+
+  range.setRichTextValue(
+    builder.build()
+  );
+}
+
+function getPayrollDisplayedWeeklyScheduleSheet_() {
+  const ss =
+    SpreadsheetApp.getActiveSpreadsheet();
+
+  const payroll =
+    ss.getSheetByName(
+      "Payroll"
+    );
+
+  if (!payroll) {
+    throw new Error(
+      'Could not find the "Payroll" tab.'
+    );
+  }
+
+  /*
+   * The visible date headers are the strongest source of
+   * truth for the week currently occupying Payroll.
+   */
+  const headerDates =
+    payroll
+      .getRange("B3:H3")
+      .getValues()[0];
+
+  let displayedDate =
+    headerDates.find(
+      function (value) {
+        return payrollScheduleOSIsValidDate_(
+          value
+        );
+      }
+    ) || null;
+
+  /*
+   * D2 is retained only as a fallback for older Payroll
+   * layouts where the date headers are unavailable.
+   */
+  if (
+    !payrollScheduleOSIsValidDate_(
+      displayedDate
+    )
+  ) {
+    displayedDate =
+      payroll
+        .getRange("D2")
+        .getValue();
+  }
+
+  if (
+    !payrollScheduleOSIsValidDate_(
+      displayedDate
+    )
+  ) {
+    throw new Error(
+      "Could not determine the week currently displayed " +
+      "on Payroll from B3:H3 or D2."
+    );
+  }
+
+  const targetMonday =
+    payrollScheduleOSMondayForDate_(
+      displayedDate
+    );
+
+  const targetKey =
+    payrollScheduleOSDateKey_(
+      targetMonday
+    );
+
+  const weeklySheets =
+    ss.getSheets().filter(
+      function (sheet) {
+        return /^Weekly Schedule Mon/i.test(
+          sheet.getName()
+        );
+      }
+    );
+
+  const matchingSheet =
+    weeklySheets.find(
+      function (sheet) {
+        let monday =
+          null;
+
+        try {
+          monday =
+            getMondayDateFromWeekly_(
+              sheet
+            );
+
+        } catch (err) {
+          monday =
+            payrollScheduleOSParseMondayFromSheetName_(
+              sheet.getName()
+            );
+        }
+
+        return (
+          payrollScheduleOSIsValidDate_(
+            monday
+          ) &&
+          payrollScheduleOSDateKey_(
+            monday
+          ) === targetKey
+        );
+      }
+    );
+
+  if (!matchingSheet) {
+    throw new Error(
+      "Could not find a Weekly Schedule tab for the " +
+      "week displayed on Payroll: " +
+      targetKey +
+      "."
+    );
+  }
+
+  Logger.log(
+    "Payroll displayed-week source: " +
+    matchingSheet.getName()
+  );
+
+  return matchingSheet;
+}
+
+
+/*
+ * Upcoming Payroll generator selector.
+ *
+ * This intentionally preserves the established behavior:
+ * the final Weekly Schedule tab is used to build the next
+ * Payroll. Do not use this selector for notes-only refreshes.
+ */
+function getCurrentPayrollWeeklyScheduleSheet_() {
+  const ss =
+    SpreadsheetApp.getActiveSpreadsheet();
+
+  const sheets =
+    ss.getSheets().filter(
+      function (sheet) {
+        return /^Weekly Schedule Mon/i.test(
+          sheet.getName()
+        );
+      }
+    );
+
+  return sheets.length
+    ? sheets[sheets.length - 1]
+    : null;
+}
+
+function payrollScheduleOSIsValidDate_(
+  value
+) {
+  return (
+    value instanceof Date &&
+    !isNaN(
+      value.getTime()
+    )
+  );
+}
+
+
+function payrollScheduleOSMondayForDate_(
+  value
+) {
+  const date =
+    new Date(
+      value.getFullYear(),
+      value.getMonth(),
+      value.getDate(),
+      12,
+      0,
+      0,
+      0
+    );
+
+  const day =
+    date.getDay();
+
+  const daysSinceMonday =
+    day === 0
+      ? 6
+      : day - 1;
+
+  date.setDate(
+    date.getDate() -
+    daysSinceMonday
+  );
+
+  return date;
+}
+
+
+function payrollScheduleOSParseMondayFromSheetName_(
+  sheetName
+) {
+  const match =
+    String(
+      sheetName || ""
+    ).match(
+      /Weekly Schedule Mon\s+(\d{1,2})\.(\d{1,2})\.(\d{2,4})/i
+    );
+
+  if (!match) {
+    return null;
+  }
+
+  let year =
+    Number(
+      match[3]
+    );
+
+  if (year < 100) {
+    year += 2000;
+  }
+
+  const parsed =
+    new Date(
+      year,
+      Number(match[1]) - 1,
+      Number(match[2]),
+      12,
+      0,
+      0,
+      0
+    );
+
+  return payrollScheduleOSIsValidDate_(
+    parsed
+  )
+    ? parsed
+    : null;
+}
+
+function buildPayrollNameMap_(castList) {
+  const values = castList.getDataRange().getDisplayValues();
+  const map = {};
+
+  for (let r = 2; r < values.length; r++) {
+    const role = values[r][0];
+    const fullName = values[r][1];
+    const shortName = values[r][2];
+
+    if (!fullName || !shortName) continue;
+
+    map[shortName.trim()] = {
+      fullName: fullName.trim(),
+      role: role.trim()
+    };
+  }
+
+  return map;
+}
+
+function getPayrollPersonBlocks_(
+  payroll
+) {
+  const blocks = [];
+
+  const maxRows =
+    payroll.getMaxRows();
+
+  /*
+   * Stage Management blocks.
+   */
+  [5, 8, 11, 14].forEach(
+    function (row) {
+      if (
+        row + 2 >
+        maxRows
+      ) {
+        return;
+      }
+
+      const name =
+        payroll
+          .getRange(
+            row,
+            1
+          )
+          .getDisplayValue()
+          .trim();
+
+      if (!name) return;
+
+      blocks.push({
+        fullName:
+          name,
+
+        topRow:
+          row,
+
+        bottomRow:
+          row + 1,
+
+        hoursRow:
+          row + 2
+      });
+    }
+  );
+
+  /*
+   * Actor blocks begin on row 19
+   * and use three rows per person.
+   */
+  for (
+    let row = 19;
+    row + 2 <= maxRows;
+    row += 3
+  ) {
+    const name =
+      payroll
+        .getRange(
+          row,
+          1
+        )
+        .getDisplayValue()
+        .trim();
+
+    if (!name) continue;
+
+    if (
+      /total|notes|payroll|actors|stage managers/i
+        .test(name)
+    ) {
+      continue;
+    }
+
+    blocks.push({
+      fullName:
+        name,
+
+      topRow:
+        row,
+
+      bottomRow:
+        row + 1,
+
+      hoursRow:
+        row + 2
+    });
+  }
+
+  return blocks;
+}
+
+function readWeeklyForPayroll_(weekly, nameMap) {
+  const values = weekly.getDataRange().getDisplayValues();
+  const days = [];
+  let currentDay = null;
+
+  values.forEach(row => {
+    const rowText = row.join(" ").trim();
+    const colA = row[0];
+    const colB = row[1];
+    const colE = row[4];
+
+    if (/^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),/i.test(colA)) {
+      currentDay = {
+        isOff: /AEA DAY OFF/i.test(rowText),
+        showParts: [],
+        rehearsalText: "",
+        rehearsalHours: 0,
+        calledFullNames: new Set()
+      };
+      days.push(currentDay);
+    }
+
+    if (!currentDay) return;
+
+    if (/AEA DAY OFF/i.test(rowText)) {
+      currentDay.isOff = true;
+      return;
+    }
+
+    if (/meeting|check-in meeting|production meeting|notes:/i.test(rowText)) return;
+
+    if (/^PERFORMANCE\s*#/i.test(colB)) {
+      const part = getPerformancePartFromWeeklyRow_(rowText);
+
+      if (!currentDay.showParts.includes(part)) {
+        currentDay.showParts.push(part);
+      }
+
+      return;
+    }
+
+    const hasTimeRange = /\d{1,2}(?::\d{2})?\s*(AM|PM)\s*-\s*\d{1,2}(?::\d{2})?\s*(AM|PM)/i.test(colA);
+    const isRehearsal = /rehearsal|put-in|put in|understudy/i.test(colB);
+
+    if (!hasTimeRange || !isRehearsal) return;
+
+    const timeText = normalizeTime_(colA);
+
+    currentDay.rehearsalText = "Rehearsal\n" + timeText;
+    currentDay.rehearsalHours += getHoursFromTimeText_(timeText);
+
+    const callText = `${colB} ${colE}`;
+    addCalledNames_(currentDay.calledFullNames, callText, nameMap);
+  });
+
+  return days;
+}
+
+/*************************************************
+ * PERFORMANCE PART
+ *
+ * Converts a Weekly performance row into:
+ * - "Mat"
+ * - "Eve"
+ * - "Unknown"
+ *************************************************/
+
+function getPerformancePartFromWeeklyRow_(
+  rowText
+) {
+  const text =
+    String(rowText || "")
+      .replace(/\s+/g, " ")
+      .trim();
+
+  if (!text) {
+    return "Unknown";
+  }
+
+  /*
+   * Prefer explicit MAT / EVE labels.
+   */
+  if (
+    /\bMAT(?:INEE)?\b/i.test(
+      text
+    )
+  ) {
+    return "Mat";
+  }
+
+  if (
+    /\bEVE(?:NING)?\b/i.test(
+      text
+    )
+  ) {
+    return "Eve";
+  }
+
+  /*
+   * Fall back to the performance time.
+   */
+  const match =
+    text.match(
+      /(\d{1,2}):(\d{2})\s*(AM|PM)/i
+    );
+
+  if (!match) {
+    return "Unknown";
+  }
+
+  let hour =
+    Number(match[1]);
+
+  const ampm =
+    match[3].toUpperCase();
+
+  if (
+    ampm === "PM" &&
+    hour !== 12
+  ) {
+    hour += 12;
+  }
+
+  if (
+    ampm === "AM" &&
+    hour === 12
+  ) {
+    hour = 0;
+  }
+
+  /*
+   * Anything before 5:00 PM is treated as a matinee.
+   * Anything at or after 5:00 PM is treated as evening.
+   */
+  return hour < 17
+    ? "Mat"
+    : "Eve";
+}
+
+function addCalledNames_(calledSet, text, nameMap) {
+  const clean = normalizeNameText_(text);
+
+  Object.keys(nameMap).forEach(shortName => {
+    const shortClean = normalizeNameText_(shortName);
+
+    if (clean.includes(shortClean)) {
+      calledSet.add(nameMap[shortName].fullName);
+    }
+  });
+
+  if (/team sm in/i.test(clean)) {
+    calledSet.add("Rachel A. Zucker");
+    calledSet.add("Chris Steckel");
+  }
+
+  if (/full cast/i.test(clean)) {
+    Object.values(nameMap).forEach(person => {
+      if (!/PSM|ASM/i.test(person.role)) {
+        calledSet.add(person.fullName);
+      }
+    });
+  }
+}
+
+function normalizeNameText_(text) {
+  return String(text || "")
+    .toLowerCase()
+    .replace(/\./g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeTime_(text) {
+  return String(text)
+    .replace(/\s+/g, " ")
+    .replace(/\s+(AM|PM)/gi, "$1")
+    .replace(/AM/g, "am")
+    .replace(/PM/g, "pm")
+    .trim();
+}
+
+function getHoursFromTimeText_(text) {
+  const match = String(text).match(/(\d{1,2})(?::(\d{2}))?\s*(AM|PM)\s*-\s*(\d{1,2})(?::(\d{2}))?\s*(AM|PM)/i);
+  if (!match) return 0;
+
+  let [, sh, sm, sap, eh, em, eap] = match;
+
+  let start = Number(sh) + (Number(sm || 0) / 60);
+  let end = Number(eh) + (Number(em || 0) / 60);
+
+  if (/PM/i.test(sap) && start < 12) start += 12;
+  if (/PM/i.test(eap) && end < 12) end += 12;
+  if (/AM/i.test(sap) && start === 12) start = 0;
+  if (/AM/i.test(eap) && end === 12) end = 0;
+
+  return Math.max(0, end - start);
+}
+
+function getMondayDateFromWeekly_(weekly) {
+  const values = weekly.getDataRange().getDisplayValues();
+
+  for (let r = 0; r < values.length; r++) {
+    const colA = values[r][0];
+
+    const match = String(colA).match(/^Monday,\s+([A-Za-z]+)\s+(\d{1,2})/i);
+    if (match) {
+      const year = new Date().getFullYear();
+      return new Date(`${match[1]} ${match[2]}, ${year}`);
+    }
+  }
+
+  throw new Error("Could not find Monday date on weekly tab.");
+}
+
+function createMondayPayrollTrigger() {
+  ScriptApp.newTrigger("fillPayrollFromCurrentWeekly")
+    .timeBased()
+    .onWeekDay(ScriptApp.WeekDay.MONDAY)
+    .atHour(12)
+    .create();
+}
+
+/*************************************************
+ * TEST CURRENT PAYROLL WEEK OUT MODEL
+ *
+ * Reads the exact week shown on Payroll and reports
+ * WeeklyOS's structured cast-out records.
+ *
+ * Does not write to Payroll.
+ *************************************************/
+
+/*************************************************
+ * BUILD WEEKLY OUT DRAFT
+ *************************************************/
+
+function payrollBuildWeeklyOutDraft_(
+  monday
+) {
+  if (
+    typeof weeklyOSCreateWeekDraft_ !==
+      "function" ||
+    typeof weeklyOSReadContactSheet_ !==
+      "function" ||
+    typeof weeklyOSReadProductionCalendar_ !==
+      "function" ||
+    typeof weeklyOSReadPdVacationTracker_ !==
+      "function"
+  ) {
+    throw new Error(
+      "Required WeeklyOS source functions are unavailable."
+    );
+  }
+
+  const draft =
+    weeklyOSCreateWeekDraft_(
+      monday
+    );
+
+  const peopleIndex =
+    weeklyOSReadContactSheet_(
+      draft
+    );
+
+  weeklyOSReadProductionCalendar_(
+    draft,
+    peopleIndex
+  );
+
+  weeklyOSReadPdVacationTracker_(
+    draft,
+    peopleIndex
+  );
+
+  if (
+    typeof weeklyOSEnrichOutsFromPeopleIndex_ ===
+    "function"
+  ) {
+    weeklyOSEnrichOutsFromPeopleIndex_(
+      draft,
+      peopleIndex
+    );
+  }
+
+  if (
+    typeof weeklyOSDeduplicateDraftSources_ ===
+    "function"
+  ) {
+    weeklyOSDeduplicateDraftSources_(
+      draft
+    );
+  }
+
+  return draft;
+}
+
+
+/*************************************************
+ * OUT REASON
+ *
+ * Prefer the contractual/type label over the
+ * free-text reason:
+ *
+ * Approved PD instead of Vacation
+ * MLOA instead of generic leave wording
+ *************************************************/
+
+function payrollGetOutReasonLabel_(
+  out
+) {
+  const type =
+    String(
+      out.type || ""
+    ).trim();
+
+  const reason =
+    String(
+      out.reason || ""
+    ).trim();
+
+  if (
+    type &&
+    !/^(out|other|planned)$/i.test(
+      type
+    )
+  ) {
+    return type;
+  }
+
+  if (reason) {
+    return reason;
+  }
+
+  return "Out";
+}
+
+
+/*************************************************
+ * WHICH PERFORMANCE PARTS ARE OUT?
+ *************************************************/
+
+function payrollGetOutPartsForDay_(
+  weeklyDay,
+  out
+) {
+  const showParts =
+    (
+      weeklyDay.showParts ||
+      []
+    ).filter(
+      function (part) {
+        return (
+          part === "Mat" ||
+          part === "Eve" ||
+          part === "Unknown"
+        );
+      }
+    );
+
+  if (!showParts.length) {
+    return [];
+  }
+
+  const appliesTo =
+    String(
+      out.appliesTo || "ALL"
+    ).toUpperCase();
+
+  if (
+    appliesTo.includes("MAT") &&
+    !appliesTo.includes("EVE")
+  ) {
+    return showParts.includes("Mat")
+      ? ["Mat"]
+      : [];
+  }
+
+  if (
+    appliesTo.includes("EVE") &&
+    !appliesTo.includes("MAT")
+  ) {
+    return showParts.includes("Eve")
+      ? ["Eve"]
+      : [];
+  }
+
+  const performanceCount =
+    Number(
+      out.numberOfPerformances || 0
+    );
+
+  /*
+   * ALL on a two-show day with two performances
+   * means both Mat and Eve.
+   */
+  if (
+    showParts.includes("Mat") &&
+    showParts.includes("Eve") &&
+    performanceCount >= 2
+  ) {
+    return [
+      "Mat",
+      "Eve"
+    ];
+  }
+
+  /*
+   * A normal one-show day.
+   */
+  if (showParts.length === 1) {
+    return [
+      showParts[0]
+    ];
+  }
+
+  /*
+   * Safe fallback for a two-show day whose source
+   * does not identify which single show applies.
+   * Do not guess.
+   */
+  return [];
+}
+
+
+/*************************************************
+ * TARGET PAYROLL CELL
+ *************************************************/
+
+function payrollGetPerformanceTarget_(
+  person,
+  weeklyDay,
+  part
+) {
+  const hasRehearsal =
+    Boolean(
+      weeklyDay.rehearsalText
+    );
+
+  const showParts =
+    weeklyDay.showParts || [];
+
+  /*
+   * Existing generator behavior:
+   * when rehearsal and performance share a day,
+   * rehearsal occupies the top row and performance
+   * occupies the bottom row.
+   */
+  if (
+  hasRehearsal &&
+  showParts.length
+) {
+  return {
+    row:
+      person.bottomRow,
+
+    suffix:
+      part === "Mat"
+        ? " - Mat"
+        : part === "Eve"
+          ? " - Eve"
+          : ""
+  };
+}
+
+  if (part === "Mat") {
+    return {
+      row:
+        person.topRow,
+
+      suffix:
+        " - Mat"
+    };
+  }
+
+  if (part === "Eve") {
+    return {
+      row:
+        person.bottomRow,
+
+      suffix:
+        ""
+    };
+  }
+
+  if (part === "Unknown") {
+    return {
+      row:
+        person.topRow,
+
+      suffix:
+        ""
+    };
+  }
+
+  return null;
+}
+
+
+/*************************************************
+ * NAME NORMALIZATION
+ *************************************************/
+
+function payrollOverlayNameKey_(
+  name
+) {
+  return String(
+    name || ""
+  )
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(
+      /[\u0300-\u036f]/g,
+      ""
+    )
+    .replace(/\./g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
