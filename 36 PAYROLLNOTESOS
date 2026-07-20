@@ -1,0 +1,887 @@
+/*************************************************
+ * 36 PAYROLLNOTESOS
+ * Version: 1.0.0
+ * Status: ACTIVE
+ *
+ * Model-driven Payroll Notes.
+ *
+ * Reads PayrollScheduleOS.
+ * Does not parse the Payroll sheet.
+ * Does not write to any sheet yet.
+ *************************************************/
+
+function PayrollNotesOS() {
+  return {
+    current: function (schedule) {
+      return payrollNotesOSCurrent_(schedule);
+    },
+
+    build: payrollNotesOSBuild_,
+
+    preview: function (schedule) {
+      return payrollNotesOSCurrent_(schedule);
+    },
+
+    test: testPayrollNotesOS
+  };
+}
+
+
+/* =========================================================
+ * BUILD CURRENT NOTES
+ * ========================================================= */
+
+function payrollNotesOSCurrent_(schedule) {
+  schedule =
+    schedule ||
+    PayrollScheduleOS().current();
+
+  return payrollNotesOSBuild_(schedule);
+}
+
+
+function payrollNotesOSBuild_(schedule) {
+  const peopleByName = {};
+
+  schedule.people.forEach(
+    function (person) {
+      peopleByName[
+        payrollNotesOSNameKey_(
+          person.name
+        )
+      ] = person;
+    }
+  );
+
+  const outGroups = {};
+
+  schedule.people.forEach(
+    function (person) {
+      person.days.forEach(
+        function (day) {
+          const isTwoShowDay =
+            Array.isArray(
+              day.showParts
+            ) &&
+            day.showParts.includes(
+              "Mat"
+            ) &&
+            day.showParts.includes(
+              "Eve"
+            );
+
+          /*
+           * OUT records
+           */
+          (day.outs || []).forEach(
+            function (out) {
+              const key = [
+                payrollNotesOSNameKey_(
+                  person.name
+                ),
+                payrollNotesOSNameKey_(
+                  out.role
+                )
+              ].join("::");
+
+              if (!outGroups[key]) {
+                outGroups[key] = {
+                  person:
+                    person.name,
+
+                  role:
+                    out.role || "",
+
+                  reason:
+                    out.reason || "Out",
+
+                  performances:
+                    [],
+
+                  coverage:
+                    []
+                };
+
+              } else {
+                /*
+                 * Prefer a specific reason such as
+                 * MLOA, Approved PD, or Illness over
+                 * the generic "Out" value that may
+                 * come from the Prep ledger.
+                 */
+                outGroups[key].reason =
+                  payrollNotesOSPreferredReason_(
+                    outGroups[key].reason,
+                    out.reason
+                  );
+              }
+
+              outGroups[key]
+                .performances
+                .push({
+                  date:
+                    day.date,
+
+                  part:
+                    out.part || "Unknown",
+
+                  isTwoShowDay:
+                    isTwoShowDay
+                });
+            }
+          );
+
+          /*
+           * Coverage records
+           */
+          (day.coverage || []).forEach(
+            function (coverage) {
+              const outKey =
+                payrollNotesOSFindOutGroupKey_(
+                  outGroups,
+                  coverage.out,
+                  coverage.role
+                );
+
+              if (!outKey) {
+                return;
+              }
+
+              outGroups[outKey]
+                .coverage
+                .push({
+                  in:
+                    coverage.in,
+
+                  role:
+                    coverage.role,
+
+                  date:
+                    day.date,
+
+                  part:
+                    coverage.part || "Unknown",
+
+                  isTwoShowDay:
+                    isTwoShowDay
+                });
+            }
+          );
+        }
+      );
+    }
+  );
+
+  const groups =
+    Object.keys(outGroups)
+      .map(
+        function (key) {
+          const group =
+            outGroups[key];
+
+          group.performances =
+            payrollNotesOSUniqueEntries_(
+              group.performances
+            );
+
+          group.coverage =
+            payrollNotesOSUniqueCoverage_(
+              group.coverage
+            );
+
+          group.missingCoverage =
+            payrollNotesOSFindMissingCoverage_(
+              group
+            );
+
+          group.note =
+            payrollNotesOSFormatOutGroup_(
+              group,
+              peopleByName
+            );
+
+          return group;
+        }
+      )
+      .sort(
+        function (a, b) {
+          return (
+            payrollNotesOSFirstSort_(
+              a.performances
+            ) -
+            payrollNotesOSFirstSort_(
+              b.performances
+            )
+          );
+        }
+      );
+
+  const notes =
+    groups
+      .map(
+        function (group) {
+          return group.note;
+        }
+      )
+      .filter(Boolean);
+
+  const missingCoverage =
+    groups
+      .filter(
+        function (group) {
+          return (
+            group.role &&
+            !/^swing$/i.test(
+              group.role
+            ) &&
+            group.missingCoverage.length
+          );
+        }
+      )
+      .map(
+        function (group) {
+          return {
+            out:
+              group.person,
+
+            role:
+              group.role,
+
+            missing:
+              group.missingCoverage
+          };
+        }
+      );
+
+  return {
+    system:
+      "PayrollNotesOS",
+
+    version:
+      "1.0.0",
+
+    weekStart:
+      schedule.weekStart,
+
+    weekEnd:
+      schedule.weekEnd,
+
+    groups:
+      groups,
+
+    notes:
+      notes,
+
+    text:
+      notes.join("\n"),
+
+    missingCoverage:
+      missingCoverage,
+
+    counts: {
+      outGroups:
+        groups.length,
+
+      outPerformances:
+        groups.reduce(
+          function (total, group) {
+            return (
+              total +
+              group.performances.length
+            );
+          },
+          0
+        ),
+
+      coveragePerformances:
+        groups.reduce(
+          function (total, group) {
+            return (
+              total +
+              group.coverage.length
+            );
+          },
+          0
+        ),
+
+      missingCoveragePerformances:
+        missingCoverage.reduce(
+          function (total, item) {
+            return (
+              total +
+              item.missing.length
+            );
+          },
+          0
+        )
+    }
+  };
+}
+/* =========================================================
+ * FORMAT ONE OUT GROUP
+ * ========================================================= */
+
+function payrollNotesOSFormatOutGroup_(
+  group,
+  peopleByName
+) {
+  const outShort =
+    payrollNotesOSShortName_(
+      group.person
+    );
+
+  const showCount =
+    group.performances.length;
+
+  let note =
+    "- " +
+    outShort +
+    " OUT (" +
+    showCount +
+    " " +
+    (
+      showCount === 1
+        ? "show"
+        : "shows"
+    ) +
+    ") (" +
+    group.reason +
+    ")";
+
+  const coverageByPerson = {};
+
+  group.coverage.forEach(
+    function (coverage) {
+      const key =
+        payrollNotesOSNameKey_(
+          coverage.in
+        );
+
+      if (!coverageByPerson[key]) {
+        coverageByPerson[key] = {
+          in:
+            coverage.in,
+
+          role:
+            coverage.role,
+
+          performances:
+            []
+        };
+      }
+
+      coverageByPerson[key]
+        .performances
+        .push({
+          date:
+            coverage.date,
+
+          part:
+            coverage.part,
+
+          isTwoShowDay:
+            coverage.isTwoShowDay === true
+        });
+    }
+  );
+
+  const coverageParts =
+    Object.keys(coverageByPerson)
+      .map(
+        function (key) {
+          const coverage =
+            coverageByPerson[key];
+
+          coverage.performances =
+            payrollNotesOSUniqueEntries_(
+              coverage.performances
+            );
+
+          const count =
+            coverage.performances.length;
+
+          return (
+            payrollNotesOSShortName_(
+              coverage.in
+            ) +
+            " IN as " +
+            (
+              payrollDisplayShortRole_(
+              coverage.role ||
+              group.role
+            ) ||
+            "Cover"
+            ) +
+            " (" +
+            count +
+            " " +
+            (
+              count === 1
+                ? "show"
+                : "shows"
+            ) +
+            "): " +
+            payrollNotesOSDateSummary_(
+              coverage.performances
+            )
+          );
+        }
+      );
+
+  if (coverageParts.length) {
+    note +=
+      ": " +
+      coverageParts.join("; ");
+  } else {
+    note +=
+      ": " +
+      payrollNotesOSDateSummary_(
+        group.performances
+      );
+  }
+
+  return note;
+}
+
+
+/* =========================================================
+ * COVERAGE COMPLETENESS
+ * ========================================================= */
+
+function payrollNotesOSFindMissingCoverage_(
+  group
+) {
+  if (
+    !group.role ||
+    /^swing$/i.test(
+      group.role
+    )
+  ) {
+    return [];
+  }
+
+  const covered = {};
+
+  group.coverage.forEach(
+    function (entry) {
+      covered[
+        payrollNotesOSEntryKey_(
+          entry
+        )
+      ] =
+        true;
+    }
+  );
+
+  return group.performances.filter(
+    function (entry) {
+      return !covered[
+        payrollNotesOSEntryKey_(
+          entry
+        )
+      ];
+    }
+  );
+}
+
+
+function payrollNotesOSFindOutGroupKey_(
+  outGroups,
+  outName,
+  role
+) {
+  const outKey =
+    payrollNotesOSNameKey_(
+      outName
+    );
+
+  const roleKey =
+    payrollNotesOSNameKey_(
+      role
+    );
+
+  return (
+    Object.keys(outGroups)
+      .find(
+        function (key) {
+          const group =
+            outGroups[key];
+
+          return (
+            payrollNotesOSNameKey_(
+              group.person
+            ) === outKey &&
+            (
+              !roleKey ||
+              payrollNotesOSNameKey_(
+                group.role
+              ) === roleKey
+            )
+          );
+        }
+      ) || ""
+  );
+}
+
+
+/* =========================================================
+ * DATE FORMATTING
+ * ========================================================= */
+
+function payrollNotesOSDateSummary_(
+  entries
+) {
+  const sorted =
+    payrollNotesOSUniqueEntries_(
+      entries
+    )
+      .slice()
+      .sort(
+        function (a, b) {
+          return (
+            payrollNotesOSSortValue_(a) -
+            payrollNotesOSSortValue_(b)
+          );
+        }
+      );
+
+  if (!sorted.length) {
+    return "";
+  }
+
+  if (sorted.length === 1) {
+    return payrollNotesOSDateLabel_(
+      sorted[0]
+    );
+  }
+
+  const first =
+    sorted[0];
+
+  const last =
+    sorted[
+      sorted.length - 1
+    ];
+
+  const sameDate =
+    first.date === last.date;
+
+  if (sameDate) {
+    const parts =
+      sorted.map(
+        function (entry) {
+          return entry.part;
+        }
+      );
+
+    if (
+      parts.indexOf("Mat") !== -1 &&
+      parts.indexOf("Eve") !== -1
+    ) {
+      return (
+        payrollNotesOSDateOnlyLabel_(
+          first.date
+        ) +
+        " (Mat & Eve)"
+      );
+    }
+  }
+
+  return (
+    payrollNotesOSDateLabel_(
+      first
+    ) +
+    " - " +
+    payrollNotesOSDateLabel_(
+      last
+    )
+  );
+}
+
+
+function payrollNotesOSDateLabel_(entry) {
+  const base =
+    payrollNotesOSDateOnlyLabel_(
+      entry.date
+    );
+
+  /*
+   * Only show Mat/Eve when that date actually
+   * contains both performances.
+   */
+  if (
+    entry.isTwoShowDay === true &&
+    (
+      entry.part === "Mat" ||
+      entry.part === "Eve"
+    )
+  ) {
+    return (
+      base +
+      " " +
+      entry.part
+    );
+  }
+
+  return base;
+}
+
+function payrollNotesOSDateOnlyLabel_(
+  dateKey
+) {
+  const date =
+    new Date(
+      dateKey +
+      "T12:00:00"
+    );
+
+  return Utilities.formatDate(
+    date,
+    Session.getScriptTimeZone(),
+    "EEE M/d"
+  );
+}
+
+
+/* =========================================================
+ * HELPERS
+ * ========================================================= */
+
+function payrollNotesOSShortName_(
+  fullName
+) {
+  const parts =
+    String(
+      fullName || ""
+    )
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean);
+
+  if (!parts.length) {
+    return "";
+  }
+
+  if (parts.length === 1) {
+    return parts[0];
+  }
+
+  return (
+    parts[0] +
+    " " +
+    parts[
+      parts.length - 1
+    ].charAt(0) +
+    "."
+  );
+}
+
+function payrollNotesOSPreferredReason_(
+  currentReason,
+  newReason
+) {
+  const current =
+    String(
+      currentReason || ""
+    ).trim();
+
+  const incoming =
+    String(
+      newReason || ""
+    ).trim();
+
+  const isGeneric =
+    function (value) {
+      return (
+        !value ||
+        /^out$/i.test(value)
+      );
+    };
+
+  if (
+    isGeneric(current) &&
+    !isGeneric(incoming)
+  ) {
+    return incoming;
+  }
+
+  if (current) {
+    return current;
+  }
+
+  return incoming || "Out";
+}
+
+
+function payrollNotesOSUniqueEntries_(
+  entries
+) {
+  const seen = {};
+
+  return (entries || [])
+    .filter(
+      function (entry) {
+        const key =
+          payrollNotesOSEntryKey_(
+            entry
+          );
+
+        if (
+          !key ||
+          seen[key]
+        ) {
+          return false;
+        }
+
+        seen[key] =
+          true;
+
+        return true;
+      }
+    );
+}
+
+
+function payrollNotesOSUniqueCoverage_(
+  entries
+) {
+  const seen = {};
+
+  return (entries || [])
+    .filter(
+      function (entry) {
+        const key = [
+          payrollNotesOSNameKey_(
+            entry.in
+          ),
+          payrollNotesOSNameKey_(
+            entry.role
+          ),
+          payrollNotesOSEntryKey_(
+            entry
+          )
+        ].join("::");
+
+        if (seen[key]) {
+          return false;
+        }
+
+        seen[key] =
+          true;
+
+        return true;
+      }
+    );
+}
+
+
+function payrollNotesOSEntryKey_(
+  entry
+) {
+  return [
+    entry.date || "",
+    entry.part || "Unknown"
+  ].join("::");
+}
+
+
+function payrollNotesOSSortValue_(
+  entry
+) {
+  const date =
+    new Date(
+      entry.date +
+      "T12:00:00"
+    );
+
+  let value =
+    date.getTime();
+
+  if (entry.part === "Mat") {
+    value += 1;
+  }
+
+  if (entry.part === "Eve") {
+    value += 2;
+  }
+
+  return value;
+}
+
+
+function payrollNotesOSFirstSort_(
+  entries
+) {
+  if (!entries.length) {
+    return Number.MAX_SAFE_INTEGER;
+  }
+
+  return Math.min.apply(
+    null,
+    entries.map(
+      payrollNotesOSSortValue_
+    )
+  );
+}
+
+
+function payrollNotesOSNameKey_(
+  value
+) {
+  return String(
+    value || ""
+  )
+    .toLowerCase()
+    .replace(/\./g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+
+/* =========================================================
+ * PREVIEW / TEST
+ * ========================================================= */
+
+function payrollNotesOSPreview_() {
+  return payrollNotesOSCurrent_();
+}
+
+
+function testPayrollNotesOS() {
+  const result =
+    PayrollNotesOS().preview();
+
+  Logger.log(
+    "PAYROLLNOTESOS PREVIEW"
+  );
+
+  Logger.log(
+    JSON.stringify(
+      result,
+      null,
+      2
+    )
+  );
+
+  SpreadsheetApp
+    .getUi()
+    .alert(
+      [
+        "PayrollNotesOS preview complete.",
+        "",
+        "OUT groups: " +
+          result.counts.outGroups,
+        "OUT performances: " +
+          result.counts.outPerformances,
+        "Coverage performances: " +
+          result.counts.coveragePerformances,
+        "Missing coverage performances: " +
+          result.counts.missingCoveragePerformances,
+        "",
+        "No Payroll Notes cells were changed.",
+        "Open the execution log for the generated notes."
+      ].join("\n")
+    );
+
+  return result;
+}
