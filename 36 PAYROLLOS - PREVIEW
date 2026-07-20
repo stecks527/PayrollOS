@@ -1,6 +1,6 @@
 /*************************************************
  * 36 PAYROLLOS - PREVIEW
- * Version: 2.0.0
+ * Version: 2.0.2
  * Status: ACTIVE
  *
  * Safe Payroll review / editor layer.
@@ -19,20 +19,54 @@
  * ========================================================= */
 
 function openPayrollOSPreview() {
-  payrollOSRequireCanonicalModules_();
+  const startedAt = Date.now();
 
+  payrollOSPreviewRequireModules_();
+
+  const scheduleStartedAt = Date.now();
+
+  /*
+   * IMPORTANT:
+   * The Builder is a review screen, not a developer rebuild command.
+   * Use current() so an existing PayrollScheduleOS model can be reused.
+   * build() intentionally forces the entire Weekly model to rebuild.
+   */
   const schedule =
-    PayrollScheduleOS().build();
+    PayrollScheduleOS().current();
+
+  Logger.log(
+    "PayrollOS Preview — Schedule: " +
+    (Date.now() - scheduleStartedAt) +
+    " ms"
+  );
+
+  const notesStartedAt = Date.now();
 
   const notes =
-    PayrollNotesOS().build(
+    payrollOSPreviewBuildNotes_(
       schedule
     );
+
+  Logger.log(
+    "PayrollOS Preview — Notes: " +
+    (Date.now() - notesStartedAt) +
+    " ms"
+  );
+
+  const writerStartedAt = Date.now();
 
   const writerPreview =
     PayrollWriterOS().preview(
       schedule
     );
+
+  Logger.log(
+    "PayrollOS Preview — Writer preview: " +
+    (Date.now() - writerStartedAt) +
+    " ms"
+  );
+
+  const payloadStartedAt = Date.now();
 
   const payload =
     payrollOSBuildPreviewPayload_(
@@ -40,6 +74,14 @@ function openPayrollOSPreview() {
       notes,
       writerPreview
     );
+
+  Logger.log(
+    "PayrollOS Preview — Payload: " +
+    (Date.now() - payloadStartedAt) +
+    " ms"
+  );
+
+  const htmlStartedAt = Date.now();
 
   const template =
     HtmlService.createTemplateFromFile(
@@ -61,16 +103,30 @@ function openPayrollOSPreview() {
         "\\u0026"
       );
 
+  const htmlOutput =
+    template
+      .evaluate()
+      .setWidth(1500)
+      .setHeight(860);
+
+  Logger.log(
+    "PayrollOS Preview — HTML evaluation: " +
+    (Date.now() - htmlStartedAt) +
+    " ms"
+  );
+
   SpreadsheetApp
     .getUi()
     .showModalDialog(
-      template
-        .evaluate()
-        .setWidth(1500)
-        .setHeight(860),
-
+      htmlOutput,
       "PayrollOS Builder"
     );
+
+  Logger.log(
+    "PayrollOS Preview — TOTAL: " +
+    (Date.now() - startedAt) +
+    " ms"
+  );
 
   return {
     success: true,
@@ -83,6 +139,103 @@ function openPayrollOSPreview() {
     weekEnd:
       schedule.weekEnd
   };
+}
+
+
+
+
+/* =========================================================
+ * MODULE ADAPTERS
+ * ========================================================= */
+
+function payrollOSPreviewRequireModules_() {
+  const missing = [];
+
+  if (
+    typeof PayrollScheduleOS !==
+    "function"
+  ) {
+    missing.push(
+      "PayrollScheduleOS"
+    );
+  }
+
+  if (
+    typeof PayrollWriterOS !==
+    "function"
+  ) {
+    missing.push(
+      "PayrollWriterOS"
+    );
+  }
+
+  /*
+   * Payroll Notes supports either the public module wrapper
+   * or the canonical internal builder. This prevents Preview
+   * from being blocked by a stale shared module-check helper.
+   */
+  if (
+    typeof PayrollNotesOS !==
+      "function" &&
+    typeof payrollNotesOSBuild_ !==
+      "function"
+  ) {
+    missing.push(
+      "PayrollNotesOS"
+    );
+  }
+
+  if (
+    typeof PayrollNotesWriterOS !==
+    "function"
+  ) {
+    missing.push(
+      "PayrollNotesWriterOS"
+    );
+  }
+
+  if (missing.length) {
+    throw new Error(
+      "Canonical PayrollOS modules missing: " +
+      missing.join(", ")
+    );
+  }
+}
+
+
+function payrollOSPreviewBuildNotes_(
+  schedule
+) {
+  if (
+    typeof PayrollNotesOS ===
+    "function"
+  ) {
+    const module =
+      PayrollNotesOS();
+
+    if (
+      module &&
+      typeof module.build ===
+        "function"
+    ) {
+      return module.build(
+        schedule
+      );
+    }
+  }
+
+  if (
+    typeof payrollNotesOSBuild_ ===
+    "function"
+  ) {
+    return payrollNotesOSBuild_(
+      schedule
+    );
+  }
+
+  throw new Error(
+    "Payroll Notes module is unavailable."
+  );
 }
 
 
@@ -101,11 +254,6 @@ function payrollOSBuildPreviewPayload_(
   const weekly =
     ss.getSheetByName(
       schedule.weeklySheet
-    );
-
-  const personRoleMap =
-    payrollOSPreviewBuildPersonRoleMap_(
-      ss
     );
 
   const days =
@@ -134,11 +282,24 @@ function payrollOSBuildPreviewPayload_(
             days: []
           };
 
-        const roleInfo =
-          payrollOSPreviewResolvePersonRole_(
-            person,
-            personRoleMap
-          );
+        const roleInfo = {
+          role:
+            person.role ||
+            person.title ||
+            (
+              person.isStageManager
+                ? "Stage Management"
+                : "Actor"
+            ),
+
+          department:
+            person.department ||
+            (
+              person.isStageManager
+                ? "Stage Management"
+                : "Cast"
+            )
+        };
 
         return {
           name:
@@ -246,7 +407,7 @@ function payrollOSBuildPreviewPayload_(
       "PayrollOSPreview",
 
     version:
-      "2.0.0",
+      "2.0.1",
 
     schedule:
       schedule,
@@ -798,9 +959,33 @@ function payrollOSPreviewReadWeeklyDayEvents_(
     return days;
   }
 
+  const lastRow =
+    weekly.getLastRow();
+
+  if (!lastRow) {
+    return days;
+  }
+
+  /*
+   * Weekly event headers only use columns A:E.
+   * Avoid getDataRange(), which can become extremely
+   * expensive when formatting extends far beyond the
+   * actual schedule.
+   */
   const values =
     weekly
-      .getDataRange()
+      .getRange(
+        1,
+        1,
+        lastRow,
+        Math.min(
+          5,
+          Math.max(
+            1,
+            weekly.getLastColumn()
+          )
+        )
+      )
       .getDisplayValues();
 
   let currentDay = null;
@@ -1385,7 +1570,7 @@ function applyPayrollOSPreview(
   );
 
   const notes =
-    PayrollNotesOS().build(
+    payrollOSPreviewBuildNotes_(
       schedule
     );
 
