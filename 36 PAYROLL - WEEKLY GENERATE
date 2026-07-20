@@ -1,1530 +1,1129 @@
 /*************************************************
- * 36 PAYROLL - WEEKLY GENERATE
- * Version: 2.1.0
- * Status: ACTIVE / CANONICAL
+ * 36 PAYROLL - TOOLS
+ * Version: 1.0.0
+ * Status: ACTIVE / LEGACY COMPATIBILITY
  *
- * Single public Payroll generation pipeline.
- *
- * PayrollScheduleOS owns every scheduling decision.
- * PayrollWriterOS writes the call grid.
- * PayrollNotesOS builds notes from the same model.
- * PayrollNotesWriterOS writes editable notes.
- *
- * No direct IN/OUT-to-Payroll cell patching.
- * No PAYROLLNOTES formula refresh.
+ * Payroll email + PDF export remain active.
+ * Legacy report parsers remain temporarily for compatibility.
  *************************************************/
 
+/*************************************************
+ * CAST REPORTS
+ *************************************************/
 
-/* =========================================================
- * PUBLIC PAYROLLOS API
- * ========================================================= */
+function CASTREPORT2_old(actorName, blockRange) {
+  if (!actorName || !blockRange) return "";
 
-function PayrollOS() {
-  return {
-    refresh:
-      payrollOSRefresh_,
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const payroll = ss.getSheetByName("Payroll");
+  const castList = ss.getSheetByName("Cast List");
 
-    current:
-      payrollOSCurrent_,
+  if (!payroll || !castList) return "";
 
-    notes:
-      payrollOSRefreshNotesOnly_,
+  const dateDisplays = payroll.getRange("B3:H3").getDisplayValues()[0];
+  const actorMap = getActorMap3_(castList);
 
-    clearCache:
-      payrollOSClearCache_,
+  const actorKey = String(actorName).trim().toLowerCase();
+  const actorInfo = actorMap[actorKey];
 
-    status:
-      payrollOSStatus_
-  };
-}
+  if (!actorInfo) return "";
 
+  const role = String(actorInfo.role || "").trim();
+  const roleLower = role.toLowerCase();
+  const shortName = actorInfo.shortName;
 
-/* =========================================================
- * PUBLIC MENU / LEGACY ENTRY POINT
- * ========================================================= */
-
-function fillPayrollFromCurrentWeekly() {
-  return openPayrollOSPreview();
-}
-
-
-/* =========================================================
- * CANONICAL REFRESH
- * ========================================================= */
-
-function payrollOSRefresh_(
-  options
-) {
-  options =
-    Object.assign(
-      {
-        forceBuild:
-          true,
-
-        writeGrid:
-          true,
-
-        writeNotes:
-          true,
-
-        showAlert:
-          false
-      },
-      options || {}
-    );
-
-  const startedAt =
-    Date.now();
-
-  const ss =
-    SpreadsheetApp
-      .getActiveSpreadsheet();
-
-  const payroll =
-    ss.getSheetByName(
-      "Payroll"
-    );
-
-  const weekly =
-    getCurrentPayrollWeeklyScheduleSheet_();
-
-  if (!payroll) {
-    throw new Error(
-      'Could not find the "Payroll" tab.'
-    );
-  }
-
-  if (!weekly) {
-    throw new Error(
-      "Current Weekly Schedule tab not found."
-    );
-  }
-
-  payrollOSRequireCanonicalModules_();
-
-  /*
-   * Build the structured weekly model exactly once.
-   *
-   * forceBuild=true is the safe path after Prep, Weekly,
-   * PD/Vacation, or company-state changes.
-   */
-  const schedule =
-    options.forceBuild
-      ? PayrollScheduleOS()
-          .build()
-      : PayrollScheduleOS()
-          .current();
-
-  const notes =
-    PayrollNotesOS()
-      .build(
-        schedule
-      );
-
-  /*
-   * Keep the displayed week-start date synchronized with
-   * the Weekly sheet selected by PayrollScheduleOS.
-   */
-  payroll
-  .getRange("D2")
-  .setValue(
-    getMondayDateFromWeekly_(
-      weekly
-    )
-  );
-
-  const payrollResult =
-    options.writeGrid
-      ? PayrollWriterOS()
-          .write(
-            schedule
-          )
-      : {
-          success:
-            true,
-
-          writes:
-            0,
-
-          notes: []
-        };
-
-  const notesResult =
-    options.writeNotes
-      ? PayrollNotesWriterOS()
-          .write(
-            notes
-          )
-      : {
-          success:
-            true,
-
-          writtenCells:
-            [],
-
-          missingCoveragePerformances:
-            notes.counts
-              .missingCoveragePerformances
-        };
-
-  const result = {
-    success:
-      Boolean(
-        payrollResult.success &&
-        notesResult.success
-      ),
-
-    source:
-      "PayrollScheduleOS",
-
-    weeklySheet:
-      schedule.weeklySheet,
-
-    weekStart:
-      schedule.weekStart,
-
-    weekEnd:
-      schedule.weekEnd,
-
-    people:
-      schedule.counts.people,
-
-    outPerformances:
-      schedule.counts.outs,
-
-    coveragePerformances:
-      schedule.counts.coverage,
-
-    payrollCellsWritten:
-      payrollResult.writes || 0,
-
-    payrollNotesWritten:
-      Boolean(
-        options.writeNotes &&
-        notesResult.success
-      ),
-
-    notesCells:
-      notesResult.writtenCells || [],
-
-    missingCoverage:
-      notesResult
-        .missingCoveragePerformances || 0,
-
-    writerNotes:
-      payrollResult.notes || [],
-
-    durationMs:
-      Date.now() -
-      startedAt
-  };
-
-  Logger.log(
-    "PAYROLLOS CANONICAL REFRESH"
-  );
-
-  Logger.log(
-    JSON.stringify(
-      result,
-      null,
-      2
-    )
-  );
-
+  // Stage-management subs are handled by the SM report functions.
   if (
-    options.showAlert
+    roleLower === "psm / asm sub" ||
+    roleLower.includes("stage manager sub") ||
+    roleLower.includes("sm sub")
   ) {
-    SpreadsheetApp
-      .getUi()
-      .alert(
-        [
-          "Payroll generated successfully.",
-          "",
-          "Week: " +
-            result.weekStart +
-            " through " +
-            result.weekEnd,
-          "People: " +
-            result.people,
-          "OUT performances: " +
-            result.outPerformances,
-          "Coverage performances: " +
-            result.coveragePerformances,
-          "Missing coverage: " +
-            result.missingCoverage,
-          "Payroll cells written: " +
-            result.payrollCellsWritten,
-          "Notes written to: " +
-            (
-              result.notesCells.length
-                ? result.notesCells.join(", ")
-                : "Not requested"
-            ),
-          "Duration: " +
-            result.durationMs +
-            " ms"
-        ].join("\n")
-      );
+    return "";
   }
 
-  return result;
-}
+  const events = parseBlock3_(blockRange, dateDisplays);
+  if (events.out.totalShows === 0) return "";
 
+  const reasonText = reasonSummary3_(events.out.reasonCounts, events.out.totalShows);
 
-/* =========================================================
- * NORMAL READ
- * ========================================================= */
+  const firstPart =
+    `- ${shortName} OUT (${events.out.totalShows} ` +
+    `${events.out.totalShows === 1 ? "show" : "shows"}) (${reasonText})`;
 
-function payrollOSCurrent_() {
-  payrollOSRequireCanonicalModules_();
+  // Swing / understudy OUTs must still appear even though they do not
+  // have a principal role whose replacement needs to be matched here.
+  const isUnderstudyOrSwing =
+    roleLower === "swing" ||
+    roleLower.includes("swing") ||
+    roleLower.includes("understudy") ||
+    roleLower === "u/s";
 
-  const schedule =
-    PayrollScheduleOS()
-      .current();
-
-  const notes =
-    PayrollNotesOS()
-      .build(
-        schedule
-      );
-
-  return {
-    schedule:
-      schedule,
-
-    notes:
-      notes
-  };
-}
-
-
-/* =========================================================
- * NOTES-ONLY COMPATIBILITY PATH
- *
- * Uses the canonical schedule model and writes normal text.
- * It never restores a PAYROLLNOTES formula.
- * ========================================================= */
-
-function payrollOSRefreshNotesOnly_(
-  options
-) {
-  options =
-    Object.assign(
-      {
-        forceBuild:
-          true,
-
-        showAlert:
-          false
-      },
-      options || {}
-    );
-
-  const startedAt =
-    Date.now();
-
-  payrollOSRequireCanonicalModules_();
-
-  const weekly =
-    getPayrollDisplayedWeeklyScheduleSheet_();
-
-  const schedule =
-    options.forceBuild
-      ? PayrollScheduleOS()
-          .buildForSheet(
-            weekly
-          )
-      : PayrollScheduleOS()
-          .currentForSheet(
-            weekly
-          );
-
-  const notes =
-    PayrollNotesOS()
-      .build(
-        schedule
-      );
-
-  const notesResult =
-    PayrollNotesWriterOS()
-      .write(
-        notes
-      );
-
-  const result = {
-    success:
-      notesResult.success === true,
-
-    source:
-      "PayrollScheduleOS displayed-week build",
-
-    weeklySheet:
-      schedule.weeklySheet,
-
-    weekStart:
-      schedule.weekStart,
-
-    weekEnd:
-      schedule.weekEnd,
-
-    people:
-      schedule.counts.people,
-
-    outPerformances:
-      schedule.counts.outs,
-
-    coveragePerformances:
-      schedule.counts.coverage,
-
-    payrollCellsWritten:
-      0,
-
-    payrollNotesWritten:
-      notesResult.success === true,
-
-    notesCells:
-      notesResult.writtenCells || [],
-
-    missingCoverage:
-      notesResult
-        .missingCoveragePerformances || 0,
-
-    durationMs:
-      Date.now() -
-      startedAt
-  };
-
-  Logger.log(
-    "PAYROLLOS DISPLAYED-WEEK NOTES REFRESH"
-  );
-
-  Logger.log(
-    JSON.stringify(
-      result,
-      null,
-      2
-    )
-  );
-
-  if (
-    options.showAlert
-  ) {
-    SpreadsheetApp
-      .getUi()
-      .alert(
-        [
-          "Payroll Notes updated successfully.",
-          "",
-          "Weekly source: " +
-            result.weeklySheet,
-          "Week: " +
-            result.weekStart +
-            " through " +
-            result.weekEnd,
-          "OUT performances: " +
-            result.outPerformances,
-          "Coverage performances: " +
-            result.coveragePerformances,
-          "Missing coverage: " +
-            result.missingCoverage,
-          "Notes written to: " +
-            (
-              result.notesCells.length
-                ? result.notesCells.join(", ")
-                : "None"
-            ),
-          "Payroll grid changed: NO",
-          "Duration: " +
-            result.durationMs +
-            " ms"
-        ].join("\n")
-      );
+  if (isUnderstudyOrSwing || !role) {
+    return `${firstPart}: ${dateSummary3_(events.out.dates)}`;
   }
 
-  return result;
-}
+  const coverage = [];
+  const lastCoverageRow = findNotesRow_(payroll) - 1;
 
+  for (let r = 5; r <= lastCoverageRow; r++) {
+    const coverActor = String(
+      payroll.getRange(r, 1).getDisplayValue() || ""
+    ).trim();
 
-/*
- * Public manual/menu entry point for updating only the
- * Payroll Notes belonging to the dates already displayed
- * across Payroll!B3:H3.
- */
-function updateCurrentPayrollNotes() {
-  return PayrollOS()
-    .notes({
-      forceBuild:
-        true,
+    const upper = coverActor.toUpperCase();
 
-      showAlert:
-        true
-    });
-}
-
-
-/* =========================================================
- * CACHE
- * ========================================================= */
-
-function payrollOSClearCache_() {
-  if (
-    typeof PayrollScheduleOS !==
-    "function"
-  ) {
-    return false;
-  }
-
-  return PayrollScheduleOS()
-    .clearCache();
-}
-
-
-/* =========================================================
- * STATUS
- * ========================================================= */
-
-function payrollOSStatus_() {
-  return {
-    system:
-      "PayrollOS",
-
-    version:
-      "2.1.0",
-
-    scheduleOSAvailable:
-      typeof PayrollScheduleOS ===
-      "function",
-
-    writerOSAvailable:
-      typeof PayrollWriterOS ===
-      "function",
-
-    notesOSAvailable:
-      typeof PayrollNotesOS ===
-      "function",
-
-    notesWriterOSAvailable:
-      typeof PayrollNotesWriterOS ===
-      "function",
-
-    canonical:
-      true
-  };
-}
-
-
-/* =========================================================
- * MODULE GUARD
- * ========================================================= */
-
-function payrollOSRequireCanonicalModules_() {
-  const missing = [];
-
-  if (
-    typeof PayrollScheduleOS !==
-    "function"
-  ) {
-    missing.push(
-      "PayrollScheduleOS"
-    );
-  }
-
-  if (
-    typeof PayrollWriterOS !==
-    "function"
-  ) {
-    missing.push(
-      "PayrollWriterOS"
-    );
-  }
-
-  if (
-    typeof PayrollNotesOS !==
-    "function"
-  ) {
-    missing.push(
-      "PayrollNotesOS"
-    );
-  }
-
-  if (
-    typeof PayrollNotesWriterOS !==
-    "function"
-  ) {
-    missing.push(
-      "PayrollNotesWriterOS"
-    );
-  }
-
-  if (
-    missing.length
-  ) {
-    throw new Error(
-      "Canonical PayrollOS modules missing:\n" +
-      missing.join("\n")
-    );
-  }
-}
-
-
-/* =========================================================
- * QUIET POST-PREP REFRESH
- * ========================================================= */
-
-function refreshPayrollFromCanonicalModel_() {
-  /*
-   * Prep is working on the current performance/week.
-   * It must refresh only the notes for the week already
-   * displayed on Payroll. It must never run the upcoming
-   * Payroll generator or rewrite the Payroll grid.
-   */
-  return PayrollOS()
-    .notes({
-      forceBuild:
-        true,
-
-      showAlert:
-        false
-    });
-}
-
-function setPayrollCell_(
-  range,
-  text
-) {
-  if (!range) return;
-
-  text =
-    String(
-      text || ""
-    );
-
-  if (!text) {
-    range.clearContent();
-    return;
-  }
-
-  const normalStyle =
-    SpreadsheetApp
-      .newTextStyle()
-      .setBold(false)
-      .build();
-
-  const boldStyle =
-    SpreadsheetApp
-      .newTextStyle()
-      .setBold(true)
-      .build();
-
-  const builder =
-    SpreadsheetApp
-      .newRichTextValue()
-      .setText(text)
-      .setTextStyle(
-        normalStyle
-      );
-
-  const phrasesToBold = [
-    "Rehearsal",
-    "1 Show Call",
-    "1 Show Call - Mat",
-    "1 Show Call - Eve",
-    "AEA DAY OFF",
-    "OUT"
-  ];
-
-  phrasesToBold.forEach(
-    function (phrase) {
-      let start =
-        text.indexOf(
-          phrase
-        );
-
-      while (
-        start !== -1
-      ) {
-        builder.setTextStyle(
-          start,
-          start +
-            phrase.length,
-          boldStyle
-        );
-
-        start =
-          text.indexOf(
-            phrase,
-            start + 1
-          );
-      }
-    }
-  );
-
-  range.setRichTextValue(
-    builder.build()
-  );
-}
-
-function getPayrollDisplayedWeeklyScheduleSheet_() {
-  const ss =
-    SpreadsheetApp.getActiveSpreadsheet();
-
-  const payroll =
-    ss.getSheetByName(
-      "Payroll"
-    );
-
-  if (!payroll) {
-    throw new Error(
-      'Could not find the "Payroll" tab.'
-    );
-  }
-
-  /*
-   * The visible date headers are the strongest source of
-   * truth for the week currently occupying Payroll.
-   */
-  const headerDates =
-    payroll
-      .getRange("B3:H3")
-      .getValues()[0];
-
-  let displayedDate =
-    headerDates.find(
-      function (value) {
-        return payrollScheduleOSIsValidDate_(
-          value
-        );
-      }
-    ) || null;
-
-  /*
-   * D2 is retained only as a fallback for older Payroll
-   * layouts where the date headers are unavailable.
-   */
-  if (
-    !payrollScheduleOSIsValidDate_(
-      displayedDate
-    )
-  ) {
-    displayedDate =
-      payroll
-        .getRange("D2")
-        .getValue();
-  }
-
-  if (
-    !payrollScheduleOSIsValidDate_(
-      displayedDate
-    )
-  ) {
-    throw new Error(
-      "Could not determine the week currently displayed " +
-      "on Payroll from B3:H3 or D2."
-    );
-  }
-
-  const targetMonday =
-    payrollScheduleOSMondayForDate_(
-      displayedDate
-    );
-
-  const targetKey =
-    payrollScheduleOSDateKey_(
-      targetMonday
-    );
-
-  const weeklySheets =
-    ss.getSheets().filter(
-      function (sheet) {
-        return /^Weekly Schedule Mon/i.test(
-          sheet.getName()
-        );
-      }
-    );
-
-  const matchingSheet =
-    weeklySheets.find(
-      function (sheet) {
-        let monday =
-          null;
-
-        try {
-          monday =
-            getMondayDateFromWeekly_(
-              sheet
-            );
-
-        } catch (err) {
-          monday =
-            payrollScheduleOSParseMondayFromSheetName_(
-              sheet.getName()
-            );
-        }
-
-        return (
-          payrollScheduleOSIsValidDate_(
-            monday
-          ) &&
-          payrollScheduleOSDateKey_(
-            monday
-          ) === targetKey
-        );
-      }
-    );
-
-  if (!matchingSheet) {
-    throw new Error(
-      "Could not find a Weekly Schedule tab for the " +
-      "week displayed on Payroll: " +
-      targetKey +
-      "."
-    );
-  }
-
-  Logger.log(
-    "Payroll displayed-week source: " +
-    matchingSheet.getName()
-  );
-
-  return matchingSheet;
-}
-
-
-/*
- * Upcoming Payroll generator selector.
- *
- * This intentionally preserves the established behavior:
- * the final Weekly Schedule tab is used to build the next
- * Payroll. Do not use this selector for notes-only refreshes.
- */
-function getCurrentPayrollWeeklyScheduleSheet_() {
-  const ss =
-    SpreadsheetApp.getActiveSpreadsheet();
-
-  const sheets =
-    ss.getSheets().filter(
-      function (sheet) {
-        return /^Weekly Schedule Mon/i.test(
-          sheet.getName()
-        );
-      }
-    );
-
-  return sheets.length
-    ? sheets[sheets.length - 1]
-    : null;
-}
-
-function payrollScheduleOSIsValidDate_(
-  value
-) {
-  return (
-    value instanceof Date &&
-    !isNaN(
-      value.getTime()
-    )
-  );
-}
-
-
-function payrollScheduleOSMondayForDate_(
-  value
-) {
-  const date =
-    new Date(
-      value.getFullYear(),
-      value.getMonth(),
-      value.getDate(),
-      12,
-      0,
-      0,
-      0
-    );
-
-  const day =
-    date.getDay();
-
-  const daysSinceMonday =
-    day === 0
-      ? 6
-      : day - 1;
-
-  date.setDate(
-    date.getDate() -
-    daysSinceMonday
-  );
-
-  return date;
-}
-
-
-function payrollScheduleOSParseMondayFromSheetName_(
-  sheetName
-) {
-  const match =
-    String(
-      sheetName || ""
-    ).match(
-      /Weekly Schedule Mon\s+(\d{1,2})\.(\d{1,2})\.(\d{2,4})/i
-    );
-
-  if (!match) {
-    return null;
-  }
-
-  let year =
-    Number(
-      match[3]
-    );
-
-  if (year < 100) {
-    year += 2000;
-  }
-
-  const parsed =
-    new Date(
-      year,
-      Number(match[1]) - 1,
-      Number(match[2]),
-      12,
-      0,
-      0,
-      0
-    );
-
-  return payrollScheduleOSIsValidDate_(
-    parsed
-  )
-    ? parsed
-    : null;
-}
-
-function buildPayrollNameMap_(castList) {
-  const values = castList.getDataRange().getDisplayValues();
-  const map = {};
-
-  for (let r = 2; r < values.length; r++) {
-    const role = values[r][0];
-    const fullName = values[r][1];
-    const shortName = values[r][2];
-
-    if (!fullName || !shortName) continue;
-
-    map[shortName.trim()] = {
-      fullName: fullName.trim(),
-      role: role.trim()
-    };
-  }
-
-  return map;
-}
-
-function getPayrollPersonBlocks_(
-  payroll
-) {
-  const blocks = [];
-
-  const maxRows =
-    payroll.getMaxRows();
-
-  /*
-   * Stage Management blocks.
-   */
-  [5, 8, 11, 14].forEach(
-    function (row) {
-      if (
-        row + 2 >
-        maxRows
-      ) {
-        return;
-      }
-
-      const name =
-        payroll
-          .getRange(
-            row,
-            1
-          )
-          .getDisplayValue()
-          .trim();
-
-      if (!name) return;
-
-      blocks.push({
-        fullName:
-          name,
-
-        topRow:
-          row,
-
-        bottomRow:
-          row + 1,
-
-        hoursRow:
-          row + 2
-      });
-    }
-  );
-
-  /*
-   * Actor blocks begin on row 19
-   * and use three rows per person.
-   */
-  for (
-    let row = 19;
-    row + 2 <= maxRows;
-    row += 3
-  ) {
-    const name =
-      payroll
-        .getRange(
-          row,
-          1
-        )
-        .getDisplayValue()
-        .trim();
-
-    if (!name) continue;
-
+    if (!coverActor) continue;
     if (
-      /total|notes|payroll|actors|stage managers/i
-        .test(name)
+      upper === "ACTORS" ||
+      upper === "STAGE MANAGERS" ||
+      upper === "NOTES"
     ) {
       continue;
     }
 
-    blocks.push({
-      fullName:
-        name,
+    const coverKey = coverActor.toLowerCase();
 
-      topRow:
-        row,
+    if (coverKey === actorKey) continue;
+    if (!actorMap[coverKey]) continue;
 
-      bottomRow:
-        row + 1,
+    const coverBlock = payroll.getRange(r, 2, 2, 7).getDisplayValues();
+    const coverEvents = parseBlock3_(coverBlock, dateDisplays);
 
-      hoursRow:
-        row + 2
+    const matchingRole = Object.keys(coverEvents.in).find(inRole => {
+      return normalizePayrollRole3_(inRole) === normalizePayrollRole3_(role);
+    });
+
+    if (!matchingRole) continue;
+
+    const data = coverEvents.in[matchingRole];
+
+    coverage.push({
+      sort: getFirstDateSort3_(data.dates),
+      text:
+        `${actorMap[coverKey].shortName} IN as ${role} ` +
+        `(${data.shows} ${data.shows === 1 ? "show" : "shows"}): ` +
+        `${dateSummary3_(data.dates)}`
     });
   }
 
-  return blocks;
+  if (coverage.length > 0) {
+    coverage.sort((a, b) => a.sort - b.sort);
+    return `${firstPart}: ${coverage.map(item => item.text).join("; ")}`;
+  }
+
+  return `${firstPart}: ${dateSummary3_(events.out.dates)}`;
 }
 
-function readWeeklyForPayroll_(weekly, nameMap) {
-  const values = weekly.getDataRange().getDisplayValues();
-  const days = [];
-  let currentDay = null;
-
-  values.forEach(row => {
-    const rowText = row.join(" ").trim();
-    const colA = row[0];
-    const colB = row[1];
-    const colE = row[4];
-
-    if (/^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),/i.test(colA)) {
-      currentDay = {
-        isOff: /AEA DAY OFF/i.test(rowText),
-        showParts: [],
-        rehearsalText: "",
-        rehearsalHours: 0,
-        calledFullNames: new Set()
-      };
-      days.push(currentDay);
-    }
-
-    if (!currentDay) return;
-
-    if (/AEA DAY OFF/i.test(rowText)) {
-      currentDay.isOff = true;
-      return;
-    }
-
-    if (/meeting|check-in meeting|production meeting|notes:/i.test(rowText)) return;
-
-    if (/^PERFORMANCE\s*#/i.test(colB)) {
-      const part = getPerformancePartFromWeeklyRow_(rowText);
-
-      if (!currentDay.showParts.includes(part)) {
-        currentDay.showParts.push(part);
-      }
-
-      return;
-    }
-
-    const hasTimeRange = /\d{1,2}(?::\d{2})?\s*(AM|PM)\s*-\s*\d{1,2}(?::\d{2})?\s*(AM|PM)/i.test(colA);
-    const isRehearsal = /rehearsal|put-in|put in|understudy/i.test(colB);
-
-    if (!hasTimeRange || !isRehearsal) return;
-
-    const timeText = normalizeTime_(colA);
-
-    currentDay.rehearsalText = "Rehearsal\n" + timeText;
-    currentDay.rehearsalHours += getHoursFromTimeText_(timeText);
-
-    const callText = `${colB} ${colE}`;
-    addCalledNames_(currentDay.calledFullNames, callText, nameMap);
-  });
-
-  return days;
+function CASTREPORT3_old(actorName, blockRange) {
+  return CASTREPORT2_old(actorName, blockRange);
 }
 
-/*************************************************
- * PERFORMANCE PART
- *
- * Converts a Weekly performance row into:
- * - "Mat"
- * - "Eve"
- * - "Unknown"
- *************************************************/
-
-function getPerformancePartFromWeeklyRow_(
-  rowText
-) {
-  const text =
-    String(rowText || "")
-      .replace(/\s+/g, " ")
-      .trim();
-
-  if (!text) {
-    return "Unknown";
-  }
-
-  /*
-   * Prefer explicit MAT / EVE labels.
-   */
-  if (
-    /\bMAT(?:INEE)?\b/i.test(
-      text
-    )
-  ) {
-    return "Mat";
-  }
-
-  if (
-    /\bEVE(?:NING)?\b/i.test(
-      text
-    )
-  ) {
-    return "Eve";
-  }
-
-  /*
-   * Fall back to the performance time.
-   */
-  const match =
-    text.match(
-      /(\d{1,2}):(\d{2})\s*(AM|PM)/i
-    );
-
-  if (!match) {
-    return "Unknown";
-  }
-
-  let hour =
-    Number(match[1]);
-
-  const ampm =
-    match[3].toUpperCase();
-
-  if (
-    ampm === "PM" &&
-    hour !== 12
-  ) {
-    hour += 12;
-  }
-
-  if (
-    ampm === "AM" &&
-    hour === 12
-  ) {
-    hour = 0;
-  }
-
-  /*
-   * Anything before 5:00 PM is treated as a matinee.
-   * Anything at or after 5:00 PM is treated as evening.
-   */
-  return hour < 17
-    ? "Mat"
-    : "Eve";
+function CASTREPORT4_old(actorName, blockRange) {
+  return CASTREPORT2_old(actorName, blockRange);
 }
 
-function addCalledNames_(calledSet, text, nameMap) {
-  const clean = normalizeNameText_(text);
-
-  Object.keys(nameMap).forEach(shortName => {
-    const shortClean = normalizeNameText_(shortName);
-
-    if (clean.includes(shortClean)) {
-      calledSet.add(nameMap[shortName].fullName);
-    }
-  });
-
-  if (/team sm in/i.test(clean)) {
-    calledSet.add("Rachel A. Zucker");
-    calledSet.add("Chris Steckel");
-  }
-
-  if (/full cast/i.test(clean)) {
-    Object.values(nameMap).forEach(person => {
-      if (!/PSM|ASM/i.test(person.role)) {
-        calledSet.add(person.fullName);
-      }
-    });
-  }
-}
-
-function normalizeNameText_(text) {
-  return String(text || "")
+function normalizePayrollRole3_(role) {
+  return String(role || "")
     .toLowerCase()
-    .replace(/\./g, "")
-    .replace(/\s+/g, " ")
-    .trim();
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/understudy/g, "us")
+    .replace(/[^a-z0-9]/g, "");
 }
 
-function normalizeTime_(text) {
-  return String(text)
-    .replace(/\s+/g, " ")
-    .replace(/\s+(AM|PM)/gi, "$1")
-    .replace(/AM/g, "am")
-    .replace(/PM/g, "pm")
-    .trim();
+/*************************************************
+ * STAGE MANAGER REPORTS
+ *
+ * SMREPORT2 / SMREPORT3 are used by Payroll notes.
+ *
+ * This version handles three cases:
+ * 1. Principal SM OUT notes.
+ * 2. Regular SM IN notes.
+ * 3. SM Sub IN notes when nobody is OUT, but another SM is
+ *    marked as Office Show for that performance.
+ *
+ * Example:
+ * - Zach D. IN (1 show) as ASM: Wed 7/1 Eve (RZ = Office Show)
+ *************************************************/
+
+function SMREPORT2_old(actorName, blockRange) {
+  if (!actorName || !blockRange) return "";
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const payroll = ss.getSheetByName("Payroll");
+  const castList = ss.getSheetByName("Cast List");
+
+  const dateDisplays = payroll.getRange("B3:H3").getDisplayValues()[0];
+  const actorMap = getActorMap3_(castList);
+
+  const actorKey = String(actorName).trim().toLowerCase();
+  const actorInfo = actorMap[actorKey] || {
+    role: "",
+    shortName: makeShortName3_(actorName)
+  };
+
+  const shortName = actorInfo.shortName;
+  const roleText = String(actorInfo.role || "").toLowerCase();
+  const events = parseBlock3_(blockRange, dateDisplays);
+  const sections = [];
+
+  /*************************************************
+   * CASE 1: This person is OUT.
+   *************************************************/
+  if (events.out.totalShows > 0) {
+    const reasonText = reasonSummary3_(events.out.reasonCounts, events.out.totalShows);
+
+    sections.push(
+      `- ${shortName} OUT (${events.out.totalShows} ${events.out.totalShows === 1 ? "show" : "shows"}) (${reasonText}): ${dateSummary3_(events.out.dates)}`
+    );
+  }
+
+  /*************************************************
+   * CASE 2 / 3: This person is IN.
+   *
+   * Principal SMs still report normal IN lines.
+   * SM subs only report IN lines when the IN is NOT covering
+   * a matching principal SM OUT.
+   *************************************************/
+  const isSub = isStageManagerSub3_(actorKey, roleText);
+
+  Object.keys(events.in).forEach(role => {
+    const data = events.in[role];
+
+    if (!isSub) {
+      sections.push(
+        `- ${shortName} IN as ${role} (${data.shows} ${data.shows === 1 ? "show" : "shows"}): ${dateSummary3_(data.dates)}`
+      );
+      return;
+    }
+
+    const standaloneSubDates = data.dates.filter(entry => {
+      return !hasMatchingPrincipalSMOut3_(payroll, actorMap, actorKey, role, entry, dateDisplays);
+    });
+
+    if (standaloneSubDates.length === 0) return;
+
+    const officeShowNote = getOfficeShowNoteForEntries3_(
+      payroll,
+      actorMap,
+      actorKey,
+      standaloneSubDates,
+      dateDisplays
+    );
+
+    sections.push(
+      `- ${shortName} IN (${standaloneSubDates.length} ${standaloneSubDates.length === 1 ? "show" : "shows"}) as ${role}: ${dateSummary3_(standaloneSubDates)}${officeShowNote}`
+    );
+  });
+
+  return sections.join("\n");
 }
 
-function getHoursFromTimeText_(text) {
-  const match = String(text).match(/(\d{1,2})(?::(\d{2}))?\s*(AM|PM)\s*-\s*(\d{1,2})(?::(\d{2}))?\s*(AM|PM)/i);
-  if (!match) return 0;
-
-  let [, sh, sm, sap, eh, em, eap] = match;
-
-  let start = Number(sh) + (Number(sm || 0) / 60);
-  let end = Number(eh) + (Number(em || 0) / 60);
-
-  if (/PM/i.test(sap) && start < 12) start += 12;
-  if (/PM/i.test(eap) && end < 12) end += 12;
-  if (/AM/i.test(sap) && start === 12) start = 0;
-  if (/AM/i.test(eap) && end === 12) end = 0;
-
-  return Math.max(0, end - start);
+function SMREPORT3_old(actorName, blockRange) {
+  return SMREPORT2_old(actorName, blockRange);
 }
 
-function getMondayDateFromWeekly_(weekly) {
-  const values = weekly.getDataRange().getDisplayValues();
+function SMPRINCIPALREPORT2_old(actorName, blockRange) {
+  if (!actorName || !blockRange) return "";
 
-  for (let r = 0; r < values.length; r++) {
-    const colA = values[r][0];
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const payroll = ss.getSheetByName("Payroll");
+  const castList = ss.getSheetByName("Cast List");
 
-    const match = String(colA).match(/^Monday,\s+([A-Za-z]+)\s+(\d{1,2})/i);
-    if (match) {
-      const year = new Date().getFullYear();
-      return new Date(`${match[1]} ${match[2]}, ${year}`);
+  const dateDisplays = payroll.getRange("B3:H3").getDisplayValues()[0];
+  const actorMap = getActorMap3_(castList);
+
+  const actorKey = String(actorName).trim().toLowerCase();
+  const actorInfo = actorMap[actorKey];
+
+  if (!actorInfo) return "";
+
+  const role = actorInfo.role;
+  const shortName = actorInfo.shortName;
+
+  const events = parseBlock3_(blockRange, dateDisplays);
+  if (events.out.totalShows === 0) return "";
+
+  const reasonText = reasonSummary3_(events.out.reasonCounts, events.out.totalShows);
+
+  const firstPart =
+    `- ${shortName} OUT (${events.out.totalShows} ${events.out.totalShows === 1 ? "show" : "shows"}) (${reasonText})`;
+
+  const coverage = [];
+  const lastCoverageRow = findNotesRow_(payroll) - 1;
+
+  for (let r = 5; r <= lastCoverageRow; r++) {
+    const coverActor = String(payroll.getRange(r, 1).getValue() || "").trim();
+    const upper = coverActor.toUpperCase();
+
+    if (!coverActor) continue;
+    if (upper === "STAGE MANAGERS" || upper === "ACTORS") continue;
+
+    const coverKey = coverActor.toLowerCase();
+
+    if (coverKey === actorKey) continue;
+    if (!actorMap[coverKey]) continue;
+
+    const coverBlock = payroll.getRange(r, 2, 2, 7).getValues();
+    const coverEvents = parseBlock3_(coverBlock, dateDisplays);
+
+    if (!coverEvents.in[role]) continue;
+
+    const data = coverEvents.in[role];
+
+    coverage.push({
+      sort: getFirstDateSort3_(data.dates),
+      text: `${actorMap[coverKey].shortName} IN as ${role} (${data.shows} ${data.shows === 1 ? "show" : "shows"}): ${dateSummary3_(data.dates)}`
+    });
+  }
+
+  if (coverage.length > 0) {
+    coverage.sort((a, b) => a.sort - b.sort);
+    return `${firstPart}: ${coverage.map(item => item.text).join("; ")}`;
+  }
+
+  return `${firstPart}: ${dateSummary3_(events.out.dates)}`;
+}
+
+/*************************************************
+ * SWING REPORTS
+ *************************************************/
+
+function SWINGREPORT2_old(actorName, blockRange) {
+  if (!actorName || !blockRange) return "";
+
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const payroll = ss.getSheetByName("Payroll");
+  const castList = ss.getSheetByName("Cast List");
+
+  const dateDisplays = payroll.getRange("B3:H3").getDisplayValues()[0];
+  const actorMap = getActorMap3_(castList);
+
+  const actorKey = String(actorName).trim().toLowerCase();
+  const actorInfo = actorMap[actorKey] || {
+    role: "",
+    shortName: makeShortName3_(actorName)
+  };
+
+  const shortName = actorInfo.shortName;
+  const events = parseBlock3_(blockRange, dateDisplays);
+
+  if (events.out.totalShows === 0) return "";
+
+  const reasonText = reasonSummary3_(events.out.reasonCounts, events.out.totalShows);
+
+  return (
+    `- ${shortName} OUT (${events.out.totalShows} ${events.out.totalShows === 1 ? "show" : "shows"}) ` +
+    `(${reasonText}): ${dateSummary3_(events.out.dates)}`
+  );
+}
+
+/*************************************************
+ * OVERTIME REPORTS
+ *************************************************/
+
+function OTREPORT2(actorName, wedHours) {
+  const rawHours = Number(wedHours);
+  const roundedHours = Math.round(rawHours * 10) / 10;
+
+  if (!roundedHours || roundedHours <= 0) return "";
+
+  const displayHours = roundedHours.toFixed(1).replace(".0", "");
+
+  return (
+    `- OT: DADO: ${actorName} gets ${displayHours} hours of OT ` +
+    `($61.68 per hour or part thereof) for rehearsing the day after the day off.`
+  );
+}
+
+
+/*************************************************
+ * STAGE MANAGER OFFICE SHOW HELPERS
+ *************************************************/
+
+function isStageManagerSub3_(actorKey, roleText) {
+  return (
+    String(roleText || "").includes("sub") ||
+    String(actorKey || "").includes("zach de brino") ||
+    String(actorKey || "").includes("kristin newhouse")
+  );
+}
+
+function hasMatchingPrincipalSMOut3_(payroll, actorMap, currentActorKey, role, entry, dateDisplays) {
+  const lastCoverageRow = findNotesRow_(payroll) - 1;
+
+  for (let r = 5; r <= lastCoverageRow; r++) {
+    const name = String(payroll.getRange(r, 1).getValue() || "").trim();
+    if (!name) continue;
+
+    const upper = name.toUpperCase();
+    if (upper === "STAGE MANAGERS" || upper === "ACTORS" || upper === "NOTES") continue;
+
+    const key = name.toLowerCase();
+    if (key === currentActorKey) continue;
+
+    const info = actorMap[key];
+    if (!info) continue;
+
+    const personRole = String(info.role || "").trim();
+    const personRoleLower = personRole.toLowerCase();
+
+    // Only principal SM rows can create a true coverage OUT.
+    if (personRoleLower.includes("sub")) continue;
+    if (personRoleLower !== String(role || "").toLowerCase()) continue;
+
+    const block = payroll.getRange(r, 2, 2, 7).getValues();
+    const events = parseBlock3_(block, dateDisplays);
+
+    if (events.out.dates.some(outEntry => sameDateEntry3_(outEntry, entry))) {
+      return true;
     }
   }
 
-  throw new Error("Could not find Monday date on weekly tab.");
+  return false;
 }
 
-function createMondayPayrollTrigger() {
-  ScriptApp.newTrigger("fillPayrollFromCurrentWeekly")
-    .timeBased()
-    .onWeekDay(ScriptApp.WeekDay.MONDAY)
-    .atHour(12)
-    .create();
+function getOfficeShowNoteForEntries3_(payroll, actorMap, currentActorKey, entries, dateDisplays) {
+  const officePeople = [];
+  const lastCoverageRow = findNotesRow_(payroll) - 1;
+
+  for (let r = 5; r <= lastCoverageRow; r++) {
+    const name = String(payroll.getRange(r, 1).getValue() || "").trim();
+    if (!name) continue;
+
+    const upper = name.toUpperCase();
+    if (upper === "STAGE MANAGERS" || upper === "ACTORS" || upper === "NOTES") continue;
+
+    const key = name.toLowerCase();
+    if (key === currentActorKey) continue;
+
+    const block = payroll.getRange(r, 2, 2, 7).getDisplayValues();
+
+    for (let col = 0; col < 7; col++) {
+      const topText = String(block[0][col] || "");
+      const bottomText = String(block[1][col] || "");
+      const base = formatDate3_(col, dateDisplays);
+
+      entries.forEach(entry => {
+        if (entry.base !== base) return;
+
+        const checkTop = entry.part !== "Eve";
+        const checkBottom = entry.part === "Eve" || entry.part === "MatEve";
+
+        if (
+          (checkTop && /office show/i.test(topText)) ||
+          (checkBottom && /office show/i.test(bottomText))
+        ) {
+          const label = getOfficeShowPayrollLabel3_(name, actorMap);
+          if (!officePeople.includes(label)) officePeople.push(label);
+        }
+      });
+    }
+  }
+
+  if (officePeople.length === 0) return "";
+
+  return ` (${officePeople.join(" + ")} = Office Show)`;
+}
+
+function getOfficeShowPayrollLabel3_(name, actorMap) {
+  const key = String(name || "").trim().toLowerCase();
+
+  const overrides = {
+    "rachel a. zucker": "RZ",
+    "chris steckel": "Chris S.",
+    "kristin newhouse": "Kristin N.",
+    "zach de brino": "Zach D."
+  };
+
+  if (overrides[key]) return overrides[key];
+  if (actorMap[key] && actorMap[key].shortName) return actorMap[key].shortName;
+
+  return makeShortName3_(name);
+}
+
+function sameDateEntry3_(a, b) {
+  return String(a.base || "") === String(b.base || "") &&
+    normalizePayrollPart3_(a.part) === normalizePayrollPart3_(b.part);
+}
+
+function normalizePayrollPart3_(part) {
+  if (part === "MatEve") return "MatEve";
+  return String(part || "");
 }
 
 /*************************************************
- * TEST CURRENT PAYROLL WEEK OUT MODEL
- *
- * Reads the exact week shown on Payroll and reports
- * WeeklyOS's structured cast-out records.
- *
- * Does not write to Payroll.
+ * SHARED CAST / NAME HELPERS
  *************************************************/
 
-/*************************************************
- * BUILD WEEKLY OUT DRAFT
- *************************************************/
+function getActorMap3_(castList) {
+  const data = castList.getRange(1, 1, castList.getLastRow(), 3).getValues();
+  const map = {};
 
-function payrollBuildWeeklyOutDraft_(
-  monday
-) {
-  if (
-    typeof weeklyOSCreateWeekDraft_ !==
-      "function" ||
-    typeof weeklyOSReadContactSheet_ !==
-      "function" ||
-    typeof weeklyOSReadProductionCalendar_ !==
-      "function" ||
-    typeof weeklyOSReadPdVacationTracker_ !==
-      "function"
-  ) {
-    throw new Error(
-      "Required WeeklyOS source functions are unavailable."
-    );
-  }
+  data.forEach(row => {
+    const role = String(row[0] || "").trim();
+    const fullName = String(row[1] || "").trim();
+    const reportName = String(row[2] || "").trim();
 
-  const draft =
-    weeklyOSCreateWeekDraft_(
-      monday
-    );
+    if (!fullName) return;
+    if (fullName.toUpperCase() === "FULL NAME") return;
 
-  const peopleIndex =
-    weeklyOSReadContactSheet_(
-      draft
-    );
+    map[fullName.toLowerCase()] = {
+      role,
+      shortName: reportName || makeShortName3_(fullName)
+    };
+  });
 
-  weeklyOSReadProductionCalendar_(
-    draft,
-    peopleIndex
-  );
-
-  weeklyOSReadPdVacationTracker_(
-    draft,
-    peopleIndex
-  );
-
-  if (
-    typeof weeklyOSEnrichOutsFromPeopleIndex_ ===
-    "function"
-  ) {
-    weeklyOSEnrichOutsFromPeopleIndex_(
-      draft,
-      peopleIndex
-    );
-  }
-
-  if (
-    typeof weeklyOSDeduplicateDraftSources_ ===
-    "function"
-  ) {
-    weeklyOSDeduplicateDraftSources_(
-      draft
-    );
-  }
-
-  return draft;
+  return map;
 }
 
+function makeShortName3_(name) {
+  const parts = String(name || "").trim().split(/\s+/);
 
-/*************************************************
- * OUT REASON
- *
- * Prefer the contractual/type label over the
- * free-text reason:
- *
- * Approved PD instead of Vacation
- * MLOA instead of generic leave wording
- *************************************************/
+  if (parts.length < 2) return String(name || "").trim();
 
-function payrollGetOutReasonLabel_(
-  out
-) {
-  const type =
-    String(
-      out.type || ""
-    ).trim();
-
-  const reason =
-    String(
-      out.reason || ""
-    ).trim();
-
-  if (
-    type &&
-    !/^(out|other|planned)$/i.test(
-      type
-    )
-  ) {
-    return type;
-  }
-
-  if (reason) {
-    return reason;
-  }
-
-  return "Out";
+  return `${parts[0]} ${parts[parts.length - 1].charAt(0)}.`;
 }
 
+function homeButtonPayrollEmailDraft() {
+  createPayrollEmailDraft();
+
+  if (typeof WorkflowStatusOS === "function") {
+    WorkflowStatusOS().markDone("PAYROLL_EMAIL");
+  }
+
+  refreshHomeAfterWorkflow_();
+}
 
 /*************************************************
- * WHICH PERFORMANCE PARTS ARE OUT?
+ * PAYROLL BLOCK PARSING HELPERS
  *************************************************/
 
-function payrollGetOutPartsForDay_(
-  weeklyDay,
-  out
-) {
-  const showParts =
-    (
-      weeklyDay.showParts ||
-      []
-    ).filter(
-      function (part) {
-        return (
-          part === "Mat" ||
-          part === "Eve" ||
-          part === "Unknown"
-        );
+function parseBlock3_(blockRange, dateDisplays) {
+  const result = {
+    out: {
+      totalShows: 0,
+      reasonCounts: {},
+      dates: []
+    },
+    in: {}
+  };
+
+  for (let col = 0; col < 7; col++) {
+    parseCell3_(String(blockRange[0][col] || ""), col, "", result, dateDisplays);
+    parseCell3_(String(blockRange[1][col] || ""), col, "Eve", result, dateDisplays);
+  }
+
+  return result;
+}
+
+function parseCell3_(cellText, colIndex, defaultPart, result, dateDisplays) {
+  const text = String(cellText || "");
+
+  const lines = text
+    .split("\n")
+    .map(line => line.trim())
+    .filter(Boolean);
+
+  lines.forEach(line => {
+    /*
+     * OUT parsing
+     *
+     * Accepts:
+     * OUT (Sick)
+     * OUT - Sick
+     * OUT Sick
+     * OUT
+     */
+    if (/\bOUT\b/i.test(line)) {
+      if (!shouldCountOutLine3_(line)) return;
+
+      const parenthesesMatch = line.match(/\bOUT\b\s*\((.*?)\)/i);
+      const dashMatch = line.match(/\bOUT\b\s*[-–—:]\s*(.+)$/i);
+      const plainMatch = line.match(/\bOUT\b\s+(.+)$/i);
+
+      let reason = "";
+
+      if (parenthesesMatch) {
+        reason = parenthesesMatch[1].trim();
+      } else if (dashMatch) {
+        reason = dashMatch[1].trim();
+      } else if (plainMatch) {
+        reason = plainMatch[1]
+          .replace(/\s*-\s*Mat\s*&\s*Eve$/i, "")
+          .replace(/\s*-\s*Mat$/i, "")
+          .replace(/\s*-\s*Eve$/i, "")
+          .trim();
       }
-    );
 
-  if (!showParts.length) {
-    return [];
-  }
+      /*
+       * Remove performance labels if they accidentally became
+       * part of the reason.
+       */
+      reason = reason
+        .replace(/\bMat\s*&\s*Eve\b/gi, "")
+        .replace(/\bMatinee\b/gi, "")
+        .replace(/\bEvening\b/gi, "")
+        .replace(/\bMat\b/gi, "")
+        .replace(/\bEve\b/gi, "")
+        .replace(/^[\s\-–—:]+|[\s\-–—:]+$/g, "")
+        .trim();
 
-  const appliesTo =
-    String(
-      out.appliesTo || "ALL"
-    ).toUpperCase();
+      if (!reason) reason = "OUT";
 
-  if (
-    appliesTo.includes("MAT") &&
-    !appliesTo.includes("EVE")
-  ) {
-    return showParts.includes("Mat")
-      ? ["Mat"]
-      : [];
-  }
+      const part = partFromLine3_(line, defaultPart);
 
-  if (
-    appliesTo.includes("EVE") &&
-    !appliesTo.includes("MAT")
-  ) {
-    return showParts.includes("Eve")
-      ? ["Eve"]
-      : [];
-  }
+      result.out.totalShows++;
+      result.out.reasonCounts[reason] =
+        (result.out.reasonCounts[reason] || 0) + 1;
 
-  const performanceCount =
-    Number(
-      out.numberOfPerformances || 0
-    );
+      result.out.dates.push(
+        makeDateEntry3_(colIndex, part, dateDisplays)
+      );
 
-  /*
-   * ALL on a two-show day with two performances
-   * means both Mat and Eve.
-   */
-  if (
-    showParts.includes("Mat") &&
-    showParts.includes("Eve") &&
-    performanceCount >= 2
-  ) {
-    return [
-      "Mat",
-      "Eve"
-    ];
-  }
+      return;
+    }
 
-  /*
-   * A normal one-show day.
-   */
-  if (showParts.length === 1) {
-    return [
-      showParts[0]
-    ];
-  }
+    /*
+     * IN parsing
+     */
+    const inMatch = line.match(/\bIN\s+as\s+(.+)/i);
 
-  /*
-   * Safe fallback for a two-show day whose source
-   * does not identify which single show applies.
-   * Do not guess.
-   */
-  return [];
+    if (inMatch) {
+      let role = inMatch[1]
+        .trim()
+        .replace(/\s*\(.*?\)\s*$/i, "")
+        .replace(/\s*-\s*Mat\s*&\s*Eve$/i, "")
+        .replace(/\s*-\s*Mat$/i, "")
+        .replace(/\s*-\s*Eve$/i, "")
+        .trim();
+
+      const part = partFromLine3_(line, defaultPart);
+
+      if (!result.in[role]) {
+        result.in[role] = {
+          shows: 0,
+          dates: []
+        };
+      }
+
+      result.in[role].shows++;
+      result.in[role].dates.push(
+        makeDateEntry3_(colIndex, part, dateDisplays)
+      );
+    }
+  });
 }
 
-
-/*************************************************
- * TARGET PAYROLL CELL
- *************************************************/
-
-function payrollGetPerformanceTarget_(
-  person,
-  weeklyDay,
-  part
-) {
-  const hasRehearsal =
-    Boolean(
-      weeklyDay.rehearsalText
-    );
-
-  const showParts =
-    weeklyDay.showParts || [];
+function shouldCountOutLine3_(line) {
+  const lowerLine = String(line || "").toLowerCase();
 
   /*
-   * Existing generator behavior:
-   * when rehearsal and performance share a day,
-   * rehearsal occupies the top row and performance
-   * occupies the bottom row.
+   * Only reject the individual OUT line when that line itself
+   * clearly says it is a rehearsal-only absence.
+   *
+   * Do not inspect the entire cell. An understudy cell may contain
+   * both rehearsal information and a legitimate show OUT.
    */
-  if (
-  hasRehearsal &&
-  showParts.length
-) {
-  return {
-    row:
-      person.bottomRow,
+  const rehearsalOnlyPatterns = [
+    /\bout\s+from\s+reh\b/i,
+    /\bout\s+from\s+rehearsal\b/i,
+    /\bout\s+of\s+reh\b/i,
+    /\bout\s+of\s+rehearsal\b/i,
+    /\brehearsal\s+only\b/i,
+    /\bput[- ]?in\s+only\b/i
+  ];
 
-    suffix:
-      part === "Mat"
-        ? " - Mat"
-        : part === "Eve"
-          ? " - Eve"
-          : ""
+  return !rehearsalOnlyPatterns.some(pattern => pattern.test(lowerLine));
+}
+
+function partFromLine3_(line, defaultPart) {
+  if (/mat\s*&\s*eve/i.test(line)) return "MatEve";
+  if (/\bmat\b/i.test(line)) return "Mat";
+  if (/\beve\b/i.test(line)) return "Eve";
+
+  return defaultPart || "";
+}
+
+function makeDateEntry3_(index, part, dateDisplays) {
+  return {
+    base: formatDate3_(index, dateDisplays),
+    part: part
   };
 }
 
-  if (part === "Mat") {
-    return {
-      row:
-        person.topRow,
+function formatDate3_(index, dateDisplays) {
+  const display = String(dateDisplays[index] || "");
 
-      suffix:
-        " - Mat"
-    };
+  const months = {
+    January: 1,
+    February: 2,
+    March: 3,
+    April: 4,
+    May: 5,
+    June: 6,
+    July: 7,
+    August: 8,
+    September: 9,
+    October: 10,
+    November: 11,
+    December: 12
+  };
+
+  const match = display.match(/^(\w+),\s+(\w+)\s+(\d+)/);
+
+  if (match) {
+    return `${match[1].slice(0, 3)} ${months[match[2]]}/${match[3]}`;
   }
 
-  if (part === "Eve") {
-    return {
-      row:
-        person.bottomRow,
+  return display;
+}
 
-      suffix:
-        ""
+function dateSummary3_(entries) {
+  if (!entries || entries.length === 0) return "";
+
+  const grouped = {};
+  const order = [];
+
+  entries.forEach(entry => {
+    const base = entry.base;
+
+    if (!grouped[base]) {
+      grouped[base] = {
+        base: base,
+        mat: false,
+        eve: false,
+        plain: false
+      };
+
+      order.push(base);
+    }
+
+    if (entry.part === "MatEve") {
+      grouped[base].mat = true;
+      grouped[base].eve = true;
+    } else if (entry.part === "Mat") {
+      grouped[base].mat = true;
+    } else if (entry.part === "Eve") {
+      grouped[base].eve = true;
+    } else {
+      grouped[base].plain = true;
+    }
+  });
+
+  const dates = order.map(base => {
+    const g = grouped[base];
+    const match = base.match(/^(\w+)\s+(\d+)\/(\d+)$/);
+
+    return {
+      base: base,
+      month: match ? Number(match[2]) : 0,
+      day: match ? Number(match[3]) : 0,
+      sort: match ? Number(match[2]) * 100 + Number(match[3]) : 0,
+      display: displayGroup3_(g),
+      startDisplay: displayEndpoint3_(g, "start"),
+      endDisplay: displayEndpoint3_(g, "end")
     };
+  });
+
+  dates.sort((a, b) => a.sort - b.sort);
+
+  const ranges = [];
+  let start = dates[0];
+  let end = dates[0];
+
+  for (let i = 1; i < dates.length; i++) {
+    const current = dates[i];
+
+    if (current.month === end.month && current.day === end.day + 1) {
+      end = current;
+    } else {
+      ranges.push(formatRange3_(start, end));
+      start = current;
+      end = current;
+    }
   }
 
-  if (part === "Unknown") {
-    return {
-      row:
-        person.topRow,
+  ranges.push(formatRange3_(start, end));
 
-      suffix:
-        ""
-    };
+  if (ranges.length === 1) return ranges[0];
+  if (ranges.length === 2) return ranges.join(" & ");
+
+  return ranges.slice(0, -1).join(", ") + " & " + ranges[ranges.length - 1];
+}
+
+function displayGroup3_(group) {
+  if (group.mat && group.eve) return `${group.base} Mat + Eve`;
+  if (group.mat) return `${group.base} Mat`;
+  if (group.eve) return `${group.base} Eve`;
+
+  return group.base;
+}
+
+function displayEndpoint3_(group, side) {
+  if (group.mat && group.eve) {
+    return `${group.base} ${side === "start" ? "Mat" : "Eve"}`;
+  }
+
+  if (group.mat) return `${group.base} Mat`;
+  if (group.eve) return `${group.base} Eve`;
+
+  return group.base;
+}
+
+function formatRange3_(start, end) {
+  if (start.sort === end.sort) return start.display;
+
+  return `${start.startDisplay} - ${end.endDisplay}`;
+}
+
+function reasonSummary3_(reasonCounts, totalShows) {
+  return Object.entries(reasonCounts)
+    .map(([reason, count]) => {
+      if (count === totalShows) return reason;
+      return `${count} ${reason}`;
+    })
+    .join(" + ");
+}
+
+function getFirstDateSort3_(entries) {
+  if (!entries || entries.length === 0) return 99999;
+
+  let earliest = 99999;
+
+  entries.forEach(entry => {
+    const parts = String(entry.base || "").split(" ");
+    if (parts.length < 2) return;
+
+    const dateParts = parts[1].split("/");
+    if (dateParts.length < 2) return;
+
+    const month = Number(dateParts[0]);
+    const day = Number(dateParts[1]);
+
+    let sortValue = month * 100 + day;
+
+    if (entry.part === "Mat") sortValue += 0.1;
+    if (entry.part === "Eve") sortValue += 0.5;
+
+    earliest = Math.min(earliest, sortValue);
+  });
+
+  return earliest;
+}
+
+function findNotesRow_(sheet) {
+  const values = sheet.getRange(1, 1, sheet.getLastRow(), 1).getDisplayValues();
+
+  for (let i = 0; i < values.length; i++) {
+    if (String(values[i][0] || "").trim().toUpperCase() === "NOTES") {
+      return i + 1;
+    }
+  }
+
+  return sheet.getLastRow();
+}
+
+/*************************************************
+ * PAYROLL NOTES — ON EDIT
+ * Version: 2.0.0
+ * Status: CANONICAL / SAFE
+ *
+ * Replace the old:
+ * - payrollNotesOnEdit_
+ * - refreshPayrollNotesFormula_
+ *
+ * Payroll sheet cells are output, not a source of truth.
+ * Editing Payroll must not trigger formula restoration or
+ * create a second Payroll write path.
+ *************************************************/
+
+
+function payrollNotesOnEdit_(e) {
+  if (
+    !e ||
+    !e.range
+  ) {
+    return;
+  }
+
+  const sheet =
+    e.range.getSheet();
+
+  if (
+    sheet.getName() !==
+    "Payroll"
+  ) {
+    return;
+  }
+
+  /*
+   * Intentionally no automatic rebuild from Payroll edits.
+   *
+   * Canonical refreshes happen when:
+   * - Fill Payroll From Weekly runs
+   * - Prep commits current performance data
+   * - PayrollOS().refresh() is called
+   *
+   * This compatibility handler remains so the central
+   * onEdit router does not need to change today.
+   */
+  return;
+}
+
+
+/*
+ * Compatibility name retained temporarily.
+ * It writes model-driven editable notes and never restores
+ * =PAYROLLNOTES() or searches for CODE OUTPUT.
+ */
+function refreshPayrollNotesFormula_() {
+  if (
+    typeof PayrollOS ===
+    "function"
+  ) {
+    return PayrollOS()
+      .notes({
+        forceBuild:
+          true
+      });
+  }
+
+  if (
+    typeof PayrollNotesWriterOS ===
+    "function"
+  ) {
+    return PayrollNotesWriterOS()
+      .write();
   }
 
   return null;
 }
 
+/**
+ * Searches the Payroll sheet for the formula producing Payroll Notes.
+ *
+ * Supports:
+ * - =PAYROLLNOTES(...)
+ * - formulas containing CASTREPORT...
+ * - formulas containing SWINGREPORT...
+ * - formulas containing SMREPORT...
+ */
 
 /*************************************************
- * NAME NORMALIZATION
+ * PAYROLL EMAIL DRAFT + PDF EXPORT
  *************************************************/
 
-function payrollOverlayNameKey_(
-  name
-) {
-  return String(
-    name || ""
-  )
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(
-      /[\u0300-\u036f]/g,
-      ""
-    )
-    .replace(/\./g, "")
-    .replace(/\s+/g, " ")
-    .trim();
+const PAYROLL_DRAFT_TO = "";
+const PAYROLL_DRIVE_FOLDER_ID = "1Q6MhR6DUZtfdhJFm2wf58f0IFAtD8ao6";
+
+function createPayrollEmailDraft() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const payrollSheet = ss.getSheetByName("Payroll");
+
+  const weekEndingDate = payrollSheet.getRange("H3").getValue();
+  const formattedDate = formatPayrollDate_(weekEndingDate);
+
+  const subject = `Spelling Bee Payroll w.e ${formattedDate}`;
+  const fileName = `Spelling Bee Payroll w.e ${formattedDate}.pdf`;
+
+  const notes = getPayrollNotes_(payrollSheet);
+  const notesHtml = notes ? notes.replace(/\n/g, "<br>") : "";
+
+  const signature = getStageOSEmailSignature_();
+
+  const body = `
+    <p>Hey Team,</p>
+    <p>Attached is the payroll for the week ending on ${formattedDate}.</p>
+    <p><strong>Notes:</strong></p>
+    <p>${notesHtml}</p>
+    ${signatureToHtml_(signature)}
+  `;
+
+  const pdfBlob = exportPayrollSheetWithSafePageBreaks_(payrollSheet).setName(fileName);
+
+  saveOrReplacePayrollPdfToDrive_(pdfBlob, fileName);
+
+    const plainBody =
+`Hey Team,
+
+Attached is the payroll for the week ending on ${formattedDate}.
+
+Notes:
+${notes}
+
+${signature}`;
+
+  GmailApp.createDraft(PAYROLL_DRAFT_TO, subject, plainBody, {
+    htmlBody: body,
+    attachments: [pdfBlob]
+  });
+
+  SpreadsheetApp.getUi().alert(
+    `Payroll email draft created and PDF saved for w.e ${formattedDate}.`
+  );
+}
+
+function getPayrollNotes_(sheet) {
+  const values = sheet.getRange(1, 1, sheet.getLastRow(), 1).getDisplayValues();
+
+  for (let i = 0; i < values.length; i++) {
+    if (String(values[i][0] || "").trim().toUpperCase() === "NOTES") {
+      return sheet.getRange(i + 1, 2).getDisplayValue();
+    }
+  }
+
+  return "";
+}
+
+function saveOrReplacePayrollPdfToDrive_(pdfBlob, fileName) {
+  const folder = DriveApp.getFolderById(PAYROLL_DRIVE_FOLDER_ID);
+  const existingFiles = folder.getFilesByName(fileName);
+
+  while (existingFiles.hasNext()) {
+    existingFiles.next().setTrashed(true);
+  }
+
+  return folder.createFile(pdfBlob);
+}
+
+function formatPayrollDate_(date) {
+  if (!(date instanceof Date)) {
+    date = new Date(date);
+  }
+
+  return Utilities.formatDate(date, Session.getScriptTimeZone(), "M.d.yy");
+}
+
+function exportSheetAsPdf_(sheet) {
+  const ss = sheet.getParent();
+
+  const url =
+    `https://docs.google.com/spreadsheets/d/${ss.getId()}/export?` +
+    `format=pdf` +
+    `&gid=${sheet.getSheetId()}` +
+    `&size=letter` +
+    `&portrait=false` +
+    `&fitw=true` +
+    `&sheetnames=false` +
+    `&printtitle=false` +
+    `&pagenumbers=false` +
+    `&gridlines=false` +
+    `&fzr=false`;
+
+  const response = UrlFetchApp.fetch(url, {
+    headers: {
+      Authorization: `Bearer ${ScriptApp.getOAuthToken()}`
+    }
+  });
+
+  return response.getBlob();
+}
+
+function exportPayrollSheetWithSafePageBreaks_(payrollSheet) {
+  const ss = payrollSheet.getParent();
+  const originalSheet = ss.getActiveSheet();
+
+  const tempSheet = ss.insertSheet(`TEMP Payroll PDF ${Date.now()}`);
+
+  try {
+    buildPayrollPdfExportSheet_(payrollSheet, tempSheet);
+
+    ss.setActiveSheet(tempSheet);
+    const blob = exportSheetAsPdf_(tempSheet);
+
+    return blob;
+
+  } finally {
+    ss.deleteSheet(tempSheet);
+    ss.setActiveSheet(originalSheet);
+  }
+}
+
+function buildPayrollPdfExportSheet_(source, target) {
+  const lastCol = 10; // A:J only
+
+  const maxCols = target.getMaxColumns();
+  if (maxCols > lastCol) {
+    target.deleteColumns(lastCol + 1, maxCols - lastCol);
+  }
+
+  for (let c = 1; c <= lastCol; c++) {
+    target.setColumnWidth(c, source.getColumnWidth(c));
+  }
+
+  let targetRow = 1;
+
+  // PAGE 1: Header + Stage Managers only
+  source.getRange(1, 1, 16, lastCol)
+    .copyTo(target.getRange(targetRow, 1), { contentsOnly: false });
+
+  copyRowHeights_(source, target, 1, 16, targetRow);
+  targetRow += 16;
+
+  // Clean white spacer to force next page
+  targetRow = addWhitePageSpacer_(target, targetRow, lastCol, 560);
+
+  // PAGE 2+: Actors through Notes
+  const notesRow = findNotesRow_(source);
+  const actorStartRow = findRowByTextInColumnA_(source, "ACTORS");
+  const rowsToCopy = notesRow + 1 - actorStartRow;
+
+  source.getRange(actorStartRow, 1, rowsToCopy, lastCol)
+    .copyTo(target.getRange(targetRow, 1), { contentsOnly: false });
+
+  copyRowHeights_(source, target, actorStartRow, rowsToCopy, targetRow);
+}
+
+function addWhitePageSpacer_(sheet, row, lastCol, height) {
+  sheet.insertRowsAfter(row - 1, 1);
+
+  const range = sheet.getRange(row, 1, 1, lastCol);
+  range
+    .clearContent()
+    .clearFormat()
+    .setBackground("#ffffff")
+    .setBorder(false, false, false, false, false, false);
+
+  sheet.setRowHeight(row, height);
+
+  return row + 1;
+
+}
+
+function copyRowHeights_(source, target, sourceStartRow, numRows, targetStartRow) {
+  for (let i = 0; i < numRows; i++) {
+    target.setRowHeight(
+      targetStartRow + i,
+      source.getRowHeight(sourceStartRow + i)
+    );
+  }
+}
+
+function insertWhitePageBreakRow_(sheet, beforeRow, height) {
+  sheet.insertRowsBefore(beforeRow, 1);
+
+  const lastCol = 10; // A:J only
+  const range = sheet.getRange(beforeRow, 1, 1, lastCol);
+
+  range
+    .clearContent()
+    .clearFormat()
+    .setBackground("#ffffff")
+    .setBorder(false, false, false, false, false, false);
+
+  sheet.setRowHeight(beforeRow, height);
+}
+
+function findRowByTextInColumnA_(sheet, text) {
+  const values = sheet.getRange(1, 1, sheet.getLastRow(), 1).getDisplayValues();
+  const target = String(text).trim().toUpperCase();
+
+  for (let i = 0; i < values.length; i++) {
+    if (String(values[i][0] || "").trim().toUpperCase() === target) {
+      return i + 1;
+    }
+  }
+
+  return -1;
 }
