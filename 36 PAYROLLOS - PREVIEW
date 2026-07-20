@@ -1,0 +1,1492 @@
+/*************************************************
+ * 36 PAYROLLOS - PREVIEW
+ * Version: 2.0.0
+ * Status: ACTIVE
+ *
+ * Safe Payroll review / editor layer.
+ *
+ * Flow:
+ * Weekly Schedule
+ *   -> PayrollScheduleOS
+ *   -> PayrollOS Builder
+ *   -> explicit Apply
+ *   -> Payroll grid + Payroll Notes
+ *************************************************/
+
+
+/* =========================================================
+ * PUBLIC LAUNCHER
+ * ========================================================= */
+
+function openPayrollOSPreview() {
+  payrollOSRequireCanonicalModules_();
+
+  const schedule =
+    PayrollScheduleOS().build();
+
+  const notes =
+    PayrollNotesOS().build(
+      schedule
+    );
+
+  const writerPreview =
+    PayrollWriterOS().preview(
+      schedule
+    );
+
+  const payload =
+    payrollOSBuildPreviewPayload_(
+      schedule,
+      notes,
+      writerPreview
+    );
+
+  const template =
+    HtmlService.createTemplateFromFile(
+      "36 PAYROLLOS - BUILDER"
+    );
+
+  template.initialPayloadJson =
+    JSON.stringify(payload)
+      .replace(
+        /</g,
+        "\\u003c"
+      )
+      .replace(
+        />/g,
+        "\\u003e"
+      )
+      .replace(
+        /&/g,
+        "\\u0026"
+      );
+
+  SpreadsheetApp
+    .getUi()
+    .showModalDialog(
+      template
+        .evaluate()
+        .setWidth(1500)
+        .setHeight(860),
+
+      "PayrollOS Builder"
+    );
+
+  return {
+    success: true,
+    weeklySheet:
+      schedule.weeklySheet,
+
+    weekStart:
+      schedule.weekStart,
+
+    weekEnd:
+      schedule.weekEnd
+  };
+}
+
+
+/* =========================================================
+ * PREVIEW PAYLOAD
+ * ========================================================= */
+
+function payrollOSBuildPreviewPayload_(
+  schedule,
+  notes,
+  writerPreview
+) {
+  const ss =
+    SpreadsheetApp.getActiveSpreadsheet();
+
+  const weekly =
+    ss.getSheetByName(
+      schedule.weeklySheet
+    );
+
+  const personRoleMap =
+    payrollOSPreviewBuildPersonRoleMap_(
+      ss
+    );
+
+  const days =
+    payrollOSPreviewDayHeaders_(
+      schedule,
+      weekly
+    );
+
+  const warnings =
+    payrollOSPreviewWarnings_(
+      schedule,
+      notes
+    );
+
+  const people =
+    (schedule.people || []).map(
+      function (
+        person,
+        personIndex
+      ) {
+        const renderedPerson =
+          (
+            writerPreview.people ||
+            []
+          )[personIndex] || {
+            days: []
+          };
+
+        const roleInfo =
+          payrollOSPreviewResolvePersonRole_(
+            person,
+            personRoleMap
+          );
+
+        return {
+          name:
+            person.name,
+
+          displayName:
+            person.name,
+
+          role:
+            roleInfo.role,
+
+          department:
+            roleInfo.department,
+
+          isStageManager:
+            Boolean(
+              person.isStageManager
+            ),
+
+          topRow:
+            person.topRow || null,
+
+          bottomRow:
+            person.bottomRow || null,
+
+          days:
+            (person.days || []).map(
+              function (
+                day,
+                dayIndex
+              ) {
+                const rendered =
+                  (
+                    renderedPerson.days ||
+                    []
+                  )[dayIndex] || {
+                    top: "",
+                    bottom: ""
+                  };
+
+                const top =
+                  rendered.top || "";
+
+                const bottom =
+                  rendered.bottom || "";
+
+                return {
+                  date:
+                    day.date,
+
+                  top:
+                    top,
+
+                  bottom:
+                    bottom,
+
+                  topKind:
+                    payrollOSPreviewClassifyText_(
+                      top,
+                      day
+                    ),
+
+                  bottomKind:
+                    payrollOSPreviewClassifyText_(
+                      bottom,
+                      day
+                    ),
+
+                  calls:
+                    day.calls || [],
+
+                  outs:
+                    day.outs || [],
+
+                  coverage:
+                    day.coverage || [],
+
+                  showParts:
+                    day.showParts || [],
+
+                  rehearsalText:
+                    day.rehearsalText ||
+                    "",
+
+                  isNewActorRehearsal:
+                    payrollOSPreviewDayHasNewActorRehearsal_(
+                      day,
+                      days[dayIndex]
+                    ),
+
+                  isUnderstudyRehearsal:
+                    payrollOSPreviewDayHasUnderstudyRehearsal_(
+                      day,
+                      days[dayIndex]
+                    )
+                };
+              }
+            )
+        };
+      }
+    );
+
+  return {
+    system:
+      "PayrollOSPreview",
+
+    version:
+      "2.0.0",
+
+    schedule:
+      schedule,
+
+    weeklySheet:
+      schedule.weeklySheet,
+
+    weekStart:
+      schedule.weekStart,
+
+    weekEnd:
+      schedule.weekEnd,
+
+    days:
+      days,
+
+    people:
+      people,
+
+    notesText:
+      notes.text || "",
+
+    notesCount:
+      (notes.notes || []).length,
+
+    warnings:
+      warnings,
+
+    summary: {
+      people:
+        people.length,
+
+      stageManagers:
+        people.filter(
+          function (person) {
+            return person.isStageManager;
+          }
+        ).length,
+
+      actors:
+        people.filter(
+          function (person) {
+            return !person.isStageManager;
+          }
+        ).length,
+
+      outPerformances:
+        schedule.counts
+          ? schedule.counts.outs
+          : 0,
+
+      coveragePerformances:
+        schedule.counts
+          ? schedule.counts.coverage
+          : 0,
+
+      missingCoverage:
+        notes.counts
+          ? notes.counts
+              .missingCoveragePerformances
+          : 0,
+
+      payrollNotes:
+        (notes.notes || []).length,
+
+      warnings:
+        warnings.length
+    }
+  };
+}
+
+
+/* =========================================================
+ * PERSON ROLE / TITLE LOOKUP
+ * ========================================================= */
+
+function payrollOSPreviewBuildPersonRoleMap_(
+  ss
+) {
+  const map = {};
+
+  payrollOSPreviewReadCastListRoles_(
+    ss,
+    map
+  );
+
+  payrollOSPreviewReadContactSheetRoles_(
+    ss,
+    map
+  );
+
+  return map;
+}
+
+
+function payrollOSPreviewReadCastListRoles_(
+  ss,
+  map
+) {
+  const sheet =
+    ss.getSheetByName(
+      "Cast List"
+    );
+
+  if (!sheet) {
+    return;
+  }
+
+  const values =
+    sheet
+      .getDataRange()
+      .getDisplayValues();
+
+  for (
+    let rowIndex = 1;
+    rowIndex < values.length;
+    rowIndex++
+  ) {
+    const row =
+      values[rowIndex] || [];
+
+    const role =
+      String(
+        row[0] || ""
+      ).trim();
+
+    const fullName =
+      String(
+        row[1] || ""
+      ).trim();
+
+    if (
+      !fullName ||
+      !role
+    ) {
+      continue;
+    }
+
+    const key =
+      payrollOSPreviewNameKey_(
+        fullName
+      );
+
+    map[key] = {
+      role:
+        role,
+
+      department:
+        "Cast",
+
+      source:
+        "Cast List"
+    };
+  }
+}
+
+
+function payrollOSPreviewReadContactSheetRoles_(
+  ss,
+  map
+) {
+  const sheetNames = [
+    "Contact Sheet",
+    "Contacts",
+    "Company Contact Sheet"
+  ];
+
+  let sheet = null;
+
+  for (
+    let index = 0;
+    index < sheetNames.length;
+    index++
+  ) {
+    sheet =
+      ss.getSheetByName(
+        sheetNames[index]
+      );
+
+    if (sheet) {
+      break;
+    }
+  }
+
+  if (!sheet) {
+    return;
+  }
+
+  const values =
+    sheet
+      .getDataRange()
+      .getDisplayValues();
+
+  for (
+    let rowIndex = 0;
+    rowIndex < values.length;
+    rowIndex++
+  ) {
+    const row =
+      values[rowIndex] || [];
+
+    const cells =
+      row.map(
+        function (value) {
+          return String(
+            value || ""
+          ).trim();
+        }
+      );
+
+    const fullName =
+      payrollOSPreviewFindLikelyFullName_(
+        cells
+      );
+
+    if (!fullName) {
+      continue;
+    }
+
+    const title =
+      payrollOSPreviewFindLikelyTitle_(
+        cells,
+        fullName
+      );
+
+    if (!title) {
+      continue;
+    }
+
+    const key =
+      payrollOSPreviewNameKey_(
+        fullName
+      );
+
+    const current =
+      map[key];
+
+    /*
+     * Contact Sheet titles take priority for
+     * Stage Management and staff. Cast List
+     * character roles remain preferred for actors.
+     */
+    if (
+      !current ||
+      payrollOSPreviewLooksLikeStageManagementTitle_(
+        title
+      )
+    ) {
+      map[key] = {
+        role:
+          title,
+
+        department:
+          payrollOSPreviewLooksLikeStageManagementTitle_(
+            title
+          )
+            ? "Stage Management"
+            : "Company",
+
+        source:
+          sheet.getName()
+      };
+    }
+  }
+}
+
+
+function payrollOSPreviewResolvePersonRole_(
+  person,
+  personRoleMap
+) {
+  const key =
+    payrollOSPreviewNameKey_(
+      person.name
+    );
+
+  const found =
+    personRoleMap[key];
+
+  if (found) {
+    return found;
+  }
+
+  if (person.isStageManager) {
+    return {
+      role:
+        "Stage Management",
+
+      department:
+        "Stage Management",
+
+      source:
+        "Payroll"
+    };
+  }
+
+  return {
+    role:
+      "Actor",
+
+    department:
+      "Cast",
+
+    source:
+      "Payroll"
+  };
+}
+
+
+function payrollOSPreviewFindLikelyFullName_(
+  cells
+) {
+  for (
+    let index = 0;
+    index < cells.length;
+    index++
+  ) {
+    const value =
+      cells[index];
+
+    if (
+      !value ||
+      value.length < 4
+    ) {
+      continue;
+    }
+
+    if (
+      /@/.test(value) ||
+      /\d{3}[-.\s]\d{3}/.test(value)
+    ) {
+      continue;
+    }
+
+    if (
+      payrollOSPreviewLooksLikeTitle_(
+        value
+      )
+    ) {
+      continue;
+    }
+
+    const words =
+      value
+        .split(/\s+/)
+        .filter(Boolean);
+
+    if (
+      words.length >= 2 &&
+      words.length <= 5 &&
+      /^[A-Za-zÀ-ÖØ-öø-ÿ.'’\-\s]+$/.test(
+        value
+      )
+    ) {
+      return value;
+    }
+  }
+
+  return "";
+}
+
+
+function payrollOSPreviewFindLikelyTitle_(
+  cells,
+  fullName
+) {
+  const preferredPatterns = [
+    /\bPSM\b/i,
+    /\bASM\b/i,
+    /\bstage manager\b/i,
+    /\bproduction stage manager\b/i,
+    /\bassistant stage manager\b/i,
+    /\bsub stage manager\b/i,
+    /\bsubstitute stage manager\b/i,
+    /\bcompany manager\b/i,
+    /\bconductor\b/i,
+    /\bmusic director\b/i
+  ];
+
+  for (
+    let patternIndex = 0;
+    patternIndex <
+      preferredPatterns.length;
+    patternIndex++
+  ) {
+    for (
+      let cellIndex = 0;
+      cellIndex < cells.length;
+      cellIndex++
+    ) {
+      const value =
+        cells[cellIndex];
+
+      if (
+        value &&
+        value !== fullName &&
+        preferredPatterns[
+          patternIndex
+        ].test(value)
+      ) {
+        return value;
+      }
+    }
+  }
+
+  for (
+    let index = 0;
+    index < cells.length;
+    index++
+  ) {
+    const value =
+      cells[index];
+
+    if (
+      value &&
+      value !== fullName &&
+      payrollOSPreviewLooksLikeTitle_(
+        value
+      )
+    ) {
+      return value;
+    }
+  }
+
+  return "";
+}
+
+
+function payrollOSPreviewLooksLikeTitle_(
+  value
+) {
+  return /(?:manager|stage|assistant|production|company|conductor|director|crew|board|wardrobe|audio|lighting|carp|props|swing|sub|PSM|ASM|SM)/i.test(
+    String(
+      value || ""
+    )
+  );
+}
+
+
+function payrollOSPreviewLooksLikeStageManagementTitle_(
+  value
+) {
+  return /(?:\bPSM\b|\bASM\b|\bSM\b|stage manager|production stage manager|assistant stage manager|sub stage manager|substitute stage manager)/i.test(
+    String(
+      value || ""
+    )
+  );
+}
+
+
+/* =========================================================
+ * DAY HEADERS / MAJOR EVENTS
+ * ========================================================= */
+
+function payrollOSPreviewDayHeaders_(
+  schedule,
+  weekly
+) {
+  const firstPerson =
+    (schedule.people || [])[0];
+
+  const scheduleDays =
+    firstPerson &&
+    Array.isArray(
+      firstPerson.days
+    )
+      ? firstPerson.days
+      : [];
+
+  const weeklyEvents =
+    payrollOSPreviewReadWeeklyDayEvents_(
+      weekly
+    );
+
+  return scheduleDays.map(
+    function (
+      day,
+      index
+    ) {
+      const date =
+        new Date(
+          String(day.date) +
+          "T12:00:00"
+        );
+
+      const eventInfo =
+        weeklyEvents[index] || {
+          events: [],
+          rehearsalEvents: [],
+          performanceEvents: []
+        };
+
+      return {
+        index:
+          index,
+
+        date:
+          day.date,
+
+        dayName:
+          Utilities.formatDate(
+            date,
+            Session.getScriptTimeZone(),
+            "EEE"
+          ),
+
+        fullDayName:
+          Utilities.formatDate(
+            date,
+            Session.getScriptTimeZone(),
+            "EEEE"
+          ),
+
+        label:
+          Utilities.formatDate(
+            date,
+            Session.getScriptTimeZone(),
+            "M/d"
+          ),
+
+        events:
+          eventInfo.events,
+
+        rehearsalEvents:
+          eventInfo.rehearsalEvents,
+
+        performanceEvents:
+          eventInfo.performanceEvents,
+
+        hasNewActorRehearsal:
+          eventInfo
+            .hasNewActorRehearsal,
+
+        hasUnderstudyRehearsal:
+          eventInfo
+            .hasUnderstudyRehearsal
+      };
+    }
+  );
+}
+
+
+function payrollOSPreviewReadWeeklyDayEvents_(
+  weekly
+) {
+  const days = [];
+
+  if (!weekly) {
+    return days;
+  }
+
+  const values =
+    weekly
+      .getDataRange()
+      .getDisplayValues();
+
+  let currentDay = null;
+
+  values.forEach(
+    function (row) {
+      const colA =
+        String(
+          row[0] || ""
+        ).trim();
+
+      const colB =
+        String(
+          row[1] || ""
+        ).trim();
+
+      const colE =
+        String(
+          row[4] || ""
+        ).trim();
+
+      const rowText =
+        row
+          .join(" ")
+          .replace(/\s+/g, " ")
+          .trim();
+
+      if (
+        /^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday),/i.test(
+          colA
+        )
+      ) {
+        currentDay = {
+          events: [],
+          rehearsalEvents: [],
+          performanceEvents: [],
+          hasNewActorRehearsal: false,
+          hasUnderstudyRehearsal: false
+        };
+
+        days.push(
+          currentDay
+        );
+
+        return;
+      }
+
+      if (!currentDay) {
+        return;
+      }
+
+      if (
+        /^PERFORMANCE\s*#/i.test(
+          colB
+        )
+      ) {
+        const performanceLabel =
+          payrollOSPreviewCleanEventLabel_(
+            colB,
+            colE
+          );
+
+        payrollOSPreviewPushUnique_(
+          currentDay
+            .performanceEvents,
+          performanceLabel
+        );
+
+        payrollOSPreviewPushUnique_(
+          currentDay.events,
+          performanceLabel
+        );
+
+        return;
+      }
+
+      const isRehearsal =
+        /rehearsal|put[\s-]?in|understudy|brush[\s-]?up|new actor|new hire/i.test(
+          rowText
+        );
+
+      if (!isRehearsal) {
+        return;
+      }
+
+      const title =
+        payrollOSPreviewCleanEventLabel_(
+          colB,
+          colE
+        ) ||
+        "Rehearsal";
+
+      payrollOSPreviewPushUnique_(
+        currentDay
+          .rehearsalEvents,
+        title
+      );
+
+      payrollOSPreviewPushUnique_(
+        currentDay.events,
+        title
+      );
+
+      if (
+        /new actor|new hire|new\s+[A-Za-zÀ-ÖØ-öø-ÿ.'’\-]+/i.test(
+          rowText
+        )
+      ) {
+        currentDay
+          .hasNewActorRehearsal =
+            true;
+      } else if (
+        /understudy|u\/s|put[\s-]?in|brush[\s-]?up/i.test(
+          rowText
+        )
+      ) {
+        currentDay
+          .hasUnderstudyRehearsal =
+            true;
+      }
+    }
+  );
+
+  return days;
+}
+
+
+function payrollOSPreviewCleanEventLabel_(
+  primary,
+  secondary
+) {
+  const pieces = [
+    String(
+      primary || ""
+    ).trim(),
+
+    String(
+      secondary || ""
+    ).trim()
+  ].filter(Boolean);
+
+  let text =
+    pieces.join(" ");
+
+  text =
+    text
+      .replace(
+        /\s+/g,
+        " "
+      )
+      .trim();
+
+  if (
+    text.length > 80
+  ) {
+    text =
+      text.substring(
+        0,
+        77
+      ) + "…";
+  }
+
+  return text;
+}
+
+
+function payrollOSPreviewPushUnique_(
+  list,
+  value
+) {
+  const text =
+    String(
+      value || ""
+    ).trim();
+
+  if (
+    text &&
+    list.indexOf(text) === -1
+  ) {
+    list.push(text);
+  }
+}
+
+
+/* =========================================================
+ * EVENT CLASSIFICATION
+ * ========================================================= */
+
+function payrollOSPreviewClassifyText_(
+  value,
+  day
+) {
+  const text =
+    String(
+      value || ""
+    )
+      .trim()
+      .toLowerCase();
+
+  if (!text) {
+    return "EMPTY";
+  }
+
+  /*
+   * Yellow:
+   * OUT, IN, coverage and Office Show.
+   */
+  if (
+    /\bout\b/.test(text) ||
+    /\bin as\b/.test(text) ||
+    /\bcoverage\b/.test(text) ||
+    /\bcovering\b/.test(text) ||
+    /\breplacement\b/.test(text) ||
+    /\boffice show\b/.test(text)
+  ) {
+    return "EXCEPTION";
+  }
+
+  if (
+    payrollOSPreviewDayHasNewActorRehearsal_(
+      day,
+      null
+    ) &&
+    /rehearsal/.test(text)
+  ) {
+    return "NEW_ACTOR_REHEARSAL";
+  }
+
+  if (
+    /\bnew actor\b/.test(text) ||
+    /\bnew hire\b/.test(text)
+  ) {
+    return "NEW_ACTOR_REHEARSAL";
+  }
+
+  if (
+    payrollOSPreviewDayHasUnderstudyRehearsal_(
+      day,
+      null
+    ) &&
+    /rehearsal/.test(text)
+  ) {
+    return "UNDERSTUDY_REHEARSAL";
+  }
+
+  if (
+    /\bu\/s\b/.test(text) ||
+    /\bunderstudy\b/.test(text) ||
+    /\bput[\s-]?in\b/.test(text) ||
+    /\bbrush[\s-]?up\b/.test(text)
+  ) {
+    return "UNDERSTUDY_REHEARSAL";
+  }
+
+  return "STANDARD";
+}
+
+
+function payrollOSPreviewDayHasNewActorRehearsal_(
+  day,
+  headerDay
+) {
+  if (
+    headerDay &&
+    headerDay.hasNewActorRehearsal
+  ) {
+    return true;
+  }
+
+  const text = [
+    day &&
+      day.rehearsalText,
+
+    day &&
+      day.rehearsalType
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  return /new actor|new hire/i.test(
+    text
+  );
+}
+
+
+function payrollOSPreviewDayHasUnderstudyRehearsal_(
+  day,
+  headerDay
+) {
+  if (
+    headerDay &&
+    headerDay.hasUnderstudyRehearsal
+  ) {
+    return true;
+  }
+
+  const text = [
+    day &&
+      day.rehearsalText,
+
+    day &&
+      day.rehearsalType
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  return /understudy|u\/s|put[\s-]?in|brush[\s-]?up/i.test(
+    text
+  );
+}
+
+
+/* =========================================================
+ * WARNINGS
+ * ========================================================= */
+
+function payrollOSPreviewWarnings_(
+  schedule,
+  notes
+) {
+  const warnings = [];
+
+  (
+    notes.missingCoverage ||
+    []
+  ).forEach(
+    function (item) {
+      (
+        item.missing ||
+        []
+      ).forEach(
+        function (missing) {
+          warnings.push({
+            severity:
+              "error",
+
+            type:
+              "MISSING_COVERAGE",
+
+            message: [
+              item.out +
+                " OUT as " +
+                item.role,
+
+              missing.date ||
+                "",
+
+              missing.part ||
+                ""
+            ]
+              .filter(Boolean)
+              .join(" — ")
+          });
+        }
+      );
+    }
+  );
+
+  (
+    schedule.people ||
+    []
+  ).forEach(
+    function (person) {
+      if (
+        !person.topRow ||
+        !person.bottomRow
+      ) {
+        warnings.push({
+          severity:
+            "error",
+
+          type:
+            "MISSING_PAYROLL_ROW",
+
+          message:
+            "No Payroll row mapping for " +
+            person.name
+        });
+      }
+
+      (
+        person.days ||
+        []
+      ).forEach(
+        function (day) {
+          (
+            day.coverage ||
+            []
+          ).forEach(
+            function (coverage) {
+              if (
+                !coverage.role ||
+                !coverage.in
+              ) {
+                warnings.push({
+                  severity:
+                    "warning",
+
+                  type:
+                    "INCOMPLETE_COVERAGE",
+
+                  message: [
+                    person.name,
+                    day.date,
+                    "has an incomplete coverage record"
+                  ].join(" — ")
+                });
+              }
+            }
+          );
+        }
+      );
+    }
+  );
+
+  return warnings;
+}
+
+
+/* =========================================================
+ * APPLY REVIEWED PAYROLL
+ * ========================================================= */
+
+function applyPayrollOSPreview(
+  payload
+) {
+  payload =
+    payload || {};
+
+  const schedule =
+    payload.schedule;
+
+  const editedPeople =
+    Array.isArray(
+      payload.people
+    )
+      ? payload.people
+      : [];
+
+  if (
+    !schedule ||
+    !Array.isArray(
+      schedule.people
+    )
+  ) {
+    throw new Error(
+      "Payroll preview data is missing or invalid."
+    );
+  }
+
+  const ss =
+    SpreadsheetApp.getActiveSpreadsheet();
+
+  const payroll =
+    ss.getSheetByName(
+      "Payroll"
+    );
+
+  const weekly =
+    ss.getSheetByName(
+      schedule.weeklySheet
+    );
+
+  if (!payroll) {
+    throw new Error(
+      'Could not find the "Payroll" tab.'
+    );
+  }
+
+  if (!weekly) {
+    throw new Error(
+      'Could not find source Weekly sheet "' +
+      schedule.weeklySheet +
+      '".'
+    );
+  }
+
+  const expectedWeekStart =
+    payrollScheduleOSDateKey_(
+      getMondayDateFromWeekly_(
+        weekly
+      )
+    );
+
+  if (
+    expectedWeekStart !==
+    schedule.weekStart
+  ) {
+    throw new Error(
+      "The Weekly source changed after this preview opened. " +
+      "Close the preview and build it again before applying."
+    );
+  }
+
+  const startedAt =
+    Date.now();
+
+  const dayCols = [
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8
+  ];
+
+  let writes = 0;
+
+  const writerNotes = [];
+
+  payroll
+    .getRange("D2")
+    .setValue(
+      getMondayDateFromWeekly_(
+        weekly
+      )
+    );
+
+  editedPeople.forEach(
+    function (person) {
+      const topRow =
+        Number(
+          person.topRow || 0
+        );
+
+      const bottomRow =
+        Number(
+          person.bottomRow || 0
+        );
+
+      if (
+        !topRow ||
+        !bottomRow
+      ) {
+        writerNotes.push(
+          "Skipped " +
+          person.name +
+          ": missing Payroll row mapping."
+        );
+
+        return;
+      }
+
+      (
+        person.days ||
+        []
+      ).forEach(
+        function (
+          day,
+          dayIndex
+        ) {
+          const col =
+            dayCols[
+              dayIndex
+            ];
+
+          if (!col) {
+            return;
+          }
+
+          payrollOSPreviewSetCell_(
+            payroll.getRange(
+              topRow,
+              col
+            ),
+            day.top || ""
+          );
+
+          payrollOSPreviewSetCell_(
+            payroll.getRange(
+              bottomRow,
+              col
+            ),
+            day.bottom || ""
+          );
+
+          writes += 2;
+        }
+      );
+    }
+  );
+
+  const notes =
+    PayrollNotesOS().build(
+      schedule
+    );
+
+  const notesResult =
+    PayrollNotesWriterOS().write(
+      notes
+    );
+
+  SpreadsheetApp.flush();
+
+  const result = {
+    success:
+      Boolean(
+        notesResult.success
+      ),
+
+    weeklySheet:
+      schedule.weeklySheet,
+
+    weekStart:
+      schedule.weekStart,
+
+    weekEnd:
+      schedule.weekEnd,
+
+    people:
+      editedPeople.length,
+
+    payrollCellsWritten:
+      writes,
+
+    payrollNotesWritten:
+      Boolean(
+        notesResult.success
+      ),
+
+    notesCells:
+      notesResult.writtenCells ||
+      [],
+
+    missingCoverage:
+      notesResult
+        .missingCoveragePerformances ||
+      0,
+
+    writerNotes:
+      writerNotes,
+
+    durationMs:
+      Date.now() -
+      startedAt
+  };
+
+  Logger.log(
+    "PAYROLLOS PREVIEW APPLY"
+  );
+
+  Logger.log(
+    JSON.stringify(
+      result,
+      null,
+      2
+    )
+  );
+
+  return result;
+}
+
+
+function payrollOSPreviewSetCell_(
+  range,
+  value
+) {
+  const text =
+    String(
+      value || ""
+    );
+
+  range.setValue(
+    text
+  );
+
+  range.setWrap(
+    true
+  );
+}
+
+
+/* =========================================================
+ * HELPERS
+ * ========================================================= */
+
+function payrollOSPreviewNameKey_(
+  value
+) {
+  return String(
+    value || ""
+  )
+    .toLowerCase()
+    .replace(
+      /[^a-z0-9]/g,
+      ""
+    );
+}
