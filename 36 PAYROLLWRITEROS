@@ -1,0 +1,780 @@
+/*************************************************
+ * 36 PAYROLLWRITEROS
+ * Version: 1.0.0
+ * Status: ACTIVE
+ *
+ * Writes the Payroll sheet from PayrollScheduleOS.
+ *
+ * Does not calculate:
+ * - Rehearsal hours
+ * - OT
+ * - Payroll Notes
+ *
+ * Those remain untouched during this first pass.
+ *************************************************/
+
+function PayrollWriterOS() {
+  return {
+    preview: function (schedule) {
+      return payrollWriterOSPreview_(schedule);
+    },
+
+    write: function (schedule) {
+      return payrollWriterOSWrite_(schedule);
+    },
+
+    test: testPayrollWriterOSPreview
+  };
+}
+
+
+/* =========================================================
+ * PREVIEW
+ * ========================================================= */
+
+function payrollWriterOSPreview_(schedule) {
+  schedule =
+    schedule ||
+    PayrollScheduleOS().current();
+
+  return {
+    system: "PayrollWriterOS",
+    version: "1.0.0",
+    weeklySheet: schedule.weeklySheet,
+    weekStart: schedule.weekStart,
+    weekEnd: schedule.weekEnd,
+
+    people: schedule.people.map(function (person) {
+      return {
+        name: person.name,
+
+        days: person.days.map(function (day) {
+          const rendered =
+            payrollWriterOSRenderDay_(day);
+
+          return {
+            date: day.date,
+            top: rendered.top,
+            bottom: rendered.bottom
+          };
+        })
+      };
+    })
+  };
+}
+
+
+/* =========================================================
+ * WRITE CURRENT WEEK
+ * ========================================================= */
+
+function payrollWriterOSWrite_(schedule) {
+  const startedAt = Date.now();
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const payroll = ss.getSheetByName("Payroll");
+
+  if (!payroll) {
+    throw new Error('Could not find "Payroll".');
+  }
+
+  schedule =
+    schedule ||
+    PayrollScheduleOS().current();
+
+  const payrollDayCols = [2, 3, 4, 5, 6, 7, 8];
+  let writes = 0;
+  const notes = [];
+
+  schedule.people.forEach(function (person) {
+    if (!person.topRow || !person.bottomRow) {
+      notes.push(
+        "Missing Payroll row mapping for " +
+        person.name +
+        "."
+      );
+      return;
+    }
+
+    person.days.forEach(function (day, dayIndex) {
+      const col = payrollDayCols[dayIndex];
+      if (!col) return;
+
+      const rendered =
+        payrollWriterOSRenderDay_(day);
+
+      payrollWriterOSSetCell_(
+        payroll.getRange(person.topRow, col),
+        rendered.top
+      );
+
+      payrollWriterOSSetCell_(
+        payroll.getRange(person.bottomRow, col),
+        rendered.bottom
+      );
+
+      writes += 2;
+    });
+  });
+
+  const result = {
+    success: notes.length === 0,
+    weeklySheet: schedule.weeklySheet,
+    weekStart: schedule.weekStart,
+    weekEnd: schedule.weekEnd,
+    people: schedule.people.length,
+    writes: writes,
+    notes: notes,
+    durationMs: Date.now() - startedAt
+  };
+
+  Logger.log("PAYROLLWRITEROS WRITE");
+  Logger.log(JSON.stringify(result, null, 2));
+
+  return result;
+}
+
+
+/* =========================================================
+ * RENDER ONE PERSON / DAY
+ * ========================================================= */
+
+function payrollWriterOSRenderDay_(
+  day
+) {
+  day = day || {};
+
+  const calls =
+    Array.isArray(
+      day.calls
+    )
+      ? day.calls
+      : [];
+
+  const outs =
+    Array.isArray(
+      day.outs
+    )
+      ? day.outs
+      : [];
+
+  const showParts =
+    Array.isArray(
+      day.showParts
+    )
+      ? day.showParts
+      : [];
+
+  const isTwoShowDay =
+    showParts.includes("Mat") &&
+    showParts.includes("Eve");
+
+  /*
+   * AEA DAY OFF always occupies the top row.
+   */
+  const dayOff =
+    calls.find(
+      function (call) {
+        return (
+          call.type ===
+          "AEA_DAY_OFF"
+        );
+      }
+    );
+
+  if (dayOff) {
+    return {
+      top:
+        "AEA DAY OFF",
+
+      bottom:
+        ""
+    };
+  }
+
+  const rehearsal =
+    calls.find(
+      function (call) {
+        return (
+          call.type ===
+            "REHEARSAL" ||
+          call.type ===
+            "REHEARSAL_NOT_CALLED"
+        );
+      }
+    );
+
+  const performanceItems =
+    payrollWriterOSBuildPerformanceItems_(
+      calls,
+      outs
+    );
+
+  /*
+   * Rehearsal occupies the top row.
+   * All performance items share the bottom row.
+   */
+  if (rehearsal) {
+    return {
+      top:
+        rehearsal.text || "",
+
+      bottom:
+        payrollWriterOSJoinPerformanceItems_(
+          performanceItems,
+          isTwoShowDay
+        )
+    };
+  }
+
+  const matItems =
+    performanceItems.filter(
+      function (item) {
+        return (
+          item.part === "Mat"
+        );
+      }
+    );
+
+  const eveItems =
+    performanceItems.filter(
+      function (item) {
+        return (
+          item.part === "Eve"
+        );
+      }
+    );
+
+  const unknownItems =
+    performanceItems.filter(
+      function (item) {
+        return (
+          item.part !== "Mat" &&
+          item.part !== "Eve"
+        );
+      }
+    );
+
+  let top = "";
+  let bottom = "";
+
+  if (matItems.length) {
+    top =
+      payrollWriterOSJoinPerformanceItems_(
+        matItems,
+        isTwoShowDay
+      );
+  }
+
+  if (eveItems.length) {
+    bottom =
+      payrollWriterOSJoinPerformanceItems_(
+        eveItems,
+        isTwoShowDay
+      );
+  }
+
+  if (unknownItems.length) {
+    const unknownText =
+      payrollWriterOSJoinPerformanceItems_(
+        unknownItems,
+        false
+      );
+
+    if (!top) {
+      top =
+        unknownText;
+
+    } else if (!bottom) {
+      bottom =
+        unknownText;
+
+    } else {
+      bottom =
+        [
+          bottom,
+          unknownText
+        ]
+          .filter(Boolean)
+          .join("\n\n");
+    }
+  }
+
+  return {
+    top:
+      top,
+
+    bottom:
+      bottom
+  };
+}
+
+
+/* =========================================================
+ * PERFORMANCE ITEMS
+ * ========================================================= */
+
+function payrollWriterOSBuildPerformanceItems_(
+  calls,
+  outs
+) {
+  const items = [];
+
+  calls.forEach(
+    function (call) {
+      if (
+        call.type !== "SHOW" &&
+        call.type !== "COVERAGE"
+      ) {
+        return;
+      }
+
+      items.push({
+        type:
+          call.type,
+
+        part:
+          call.part || "Unknown",
+
+        text:
+          call.text || "",
+
+        role:
+          call.role || "",
+
+        out:
+          call.out || ""
+      });
+    }
+  );
+
+  outs.forEach(
+    function (out) {
+      items.push({
+        type:
+          "OUT",
+
+        part:
+          out.part || "Unknown",
+
+        text:
+          out.text ||
+          (
+            "OUT (" +
+            (
+              out.reason ||
+              "Out"
+            ) +
+            ")"
+          ),
+
+        role:
+          out.role || "",
+
+        out:
+          out.person || ""
+      });
+    }
+  );
+
+  return items.sort(
+    function (a, b) {
+      return (
+        payrollWriterOSPartRank_(
+          a.part
+        ) -
+        payrollWriterOSPartRank_(
+          b.part
+        )
+      );
+    }
+  );
+}
+
+
+/* =========================================================
+ * JOIN PERFORMANCE ITEMS
+ * ========================================================= */
+
+function payrollWriterOSJoinPerformanceItems_(
+  items,
+  forcePartLabels
+) {
+  if (!items.length) {
+    return "";
+  }
+
+  return items
+    .map(
+      function (item) {
+        return payrollWriterOSRenderPerformanceItem_(
+          item,
+          Boolean(
+            forcePartLabels
+          )
+        );
+      }
+    )
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+
+function payrollWriterOSRenderPerformanceItem_(
+  item,
+  showPart
+) {
+  let text =
+    String(
+      item.text || ""
+    ).trim();
+
+  if (!text) {
+    return "";
+  }
+
+  /*
+   * SHOW CALLS
+   */
+  if (
+    item.type ===
+    "SHOW"
+  ) {
+    if (!showPart) {
+      return text.replace(
+        /\s*-\s*(Mat|Eve)$/i,
+        ""
+      );
+    }
+
+    if (
+      item.part === "Mat" ||
+      item.part === "Eve"
+    ) {
+      const baseText =
+        text.replace(
+          /\s*-\s*(Mat|Eve)$/i,
+          ""
+        );
+
+      return (
+        baseText +
+        " - " +
+        item.part
+      );
+    }
+
+    return text;
+  }
+
+  /*
+   * Payroll intentionally uses short character names.
+   * Rebuild coverage text from the structured role instead
+   * of trusting the full-character text stored in the model.
+   */
+  if (
+    item.type ===
+    "COVERAGE"
+  ) {
+    text =
+      "1 Show Call - IN as " +
+      (
+        payrollDisplayShortRole_(
+          item.role
+        ) ||
+        "Cover"
+      );
+  }
+
+  /*
+   * OUT and COVERAGE entries only need Mat/Eve when both
+   * performances share one cell.
+   */
+  if (
+    showPart &&
+    (
+      item.part === "Mat" ||
+      item.part === "Eve"
+    )
+  ) {
+    text +=
+      " - " +
+      item.part;
+  }
+
+  return text;
+}
+
+function payrollWriterOSPartRank_(
+  part
+) {
+  if (part === "Mat") {
+    return 1;
+  }
+
+  if (part === "Eve") {
+    return 2;
+  }
+
+  return 3;
+}
+
+
+/* =========================================================
+ * CELL WRITE
+ * ========================================================= */
+
+function payrollWriterOSSetCell_(
+  range,
+  text
+) {
+  text =
+    String(
+      text || ""
+    );
+
+  if (!text) {
+    range.clearContent();
+    return;
+  }
+
+  /*
+   * Bold the entire cell whenever it contains
+   * one or more OUT entries.
+   */
+  if (
+    /(^|\n)OUT\s*\(|\bIN\s+as\b/i.test(
+      text
+    )
+  ) {
+    const boldStyle =
+      SpreadsheetApp
+        .newTextStyle()
+        .setBold(true)
+        .build();
+
+    const richText =
+      SpreadsheetApp
+        .newRichTextValue()
+        .setText(
+          text
+        )
+        .setTextStyle(
+          0,
+          text.length,
+          boldStyle
+        )
+        .build();
+
+    range.setRichTextValue(
+      richText
+    );
+
+    return;
+  }
+
+  /*
+   * Continue using the existing formatter for
+   * rehearsals, show calls, coverage, and AEA Day Off.
+   */
+  if (
+    typeof setPayrollCell_ ===
+    "function"
+  ) {
+    setPayrollCell_(
+      range,
+      text
+    );
+
+    return;
+  }
+
+  range.setValue(
+    text
+  );
+}
+
+/* =========================================================
+ * TESTS
+ * ========================================================= */
+
+function testPayrollWriterOSPreview() {
+  const preview =
+    PayrollWriterOS()
+      .preview();
+
+  const sampleNames = [
+    "Rachel A. Zucker",
+    "Justin Cooley",
+    "Kevin McHale",
+    "Brandon L. Armstrong",
+    "Fernell Hogan",
+    "Cecilia Snow"
+  ];
+
+  const samples =
+    preview.people.filter(
+      function (person) {
+        return (
+          sampleNames.indexOf(
+            person.name
+          ) !== -1
+        );
+      }
+    );
+
+  Logger.log(
+    "PAYROLLWRITEROS PREVIEW"
+  );
+
+  Logger.log(
+    JSON.stringify(
+      {
+        weeklySheet:
+          preview.weeklySheet,
+
+        weekStart:
+          preview.weekStart,
+
+        weekEnd:
+          preview.weekEnd,
+
+        samples:
+          samples
+      },
+      null,
+      2
+    )
+  );
+
+  SpreadsheetApp
+    .getUi()
+    .alert(
+      [
+        "PayrollWriterOS preview complete.",
+        "",
+        "Week: " +
+          preview.weekStart +
+          " through " +
+          preview.weekEnd,
+        "People modeled: " +
+          preview.people.length,
+        "",
+        "No Payroll cells were changed.",
+        "Open the execution log for sample output."
+      ].join("\n")
+    );
+
+  return preview;
+}
+
+
+function testPayrollWriterOSWrite() {
+  return PayrollWriterOS()
+    .write();
+}
+
+/* =========================================================
+ * PAYROLL DISPLAY ROLE
+ *
+ * Payroll and Weekly are the two places that intentionally
+ * use short character names.
+ *
+ * The structured model keeps its original/full role value
+ * for matching. This helper changes display only.
+ * ========================================================= */
+
+function payrollDisplayShortRole_(
+  roleName
+) {
+  const input =
+    String(
+      roleName || ""
+    )
+      .replace(/\s+/g, " ")
+      .trim();
+
+  if (!input) {
+    return "";
+  }
+
+  if (
+    typeof getCastListData_ !==
+    "function"
+  ) {
+    return input;
+  }
+
+  const data =
+    getCastListData_();
+
+  const rows =
+    data &&
+    Array.isArray(
+      data.rows
+    )
+      ? data.rows
+      : [];
+
+  const wanted =
+    payrollDisplayRoleKey_(
+      input
+    );
+
+  for (
+    let index = 0;
+    index < rows.length;
+    index++
+  ) {
+    const row =
+      rows[index] || {};
+
+    const shortRole =
+      String(
+        row.role || ""
+      )
+        .replace(/\s+/g, " ")
+        .trim();
+
+    const fullCharacter =
+      String(
+        row.character || ""
+      )
+        .replace(/\s+/g, " ")
+        .trim();
+
+    if (
+      payrollDisplayRoleKey_(
+        shortRole
+      ) === wanted ||
+      payrollDisplayRoleKey_(
+        fullCharacter
+      ) === wanted
+    ) {
+      return (
+        shortRole ||
+        input
+      );
+    }
+  }
+
+  return input;
+}
+
+
+function payrollDisplayRoleKey_(
+  value
+) {
+  return String(
+    value || ""
+  )
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(
+      /[\u0300-\u036f]/g,
+      ""
+    )
+    .replace(
+      /[^a-z0-9]+/g,
+      ""
+    );
+}
